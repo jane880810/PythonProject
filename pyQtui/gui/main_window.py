@@ -1,6 +1,6 @@
 """
 gui/main_window.py
-主視窗 - 完整控制面板版本
+主視窗 - 完整控制面板版本（優化關節控制介面）
 """
 
 from PyQt5.QtWidgets import *
@@ -67,7 +67,7 @@ class RobotMainWindow(QMainWindow):
                 border: 2px solid {theme['border']};
                 border-radius: 8px;
                 margin-top: 10px;
-                padding: 15px;
+                padding: 15px 10px 10px 10px;
                 font-weight: bold;
             }}
             QGroupBox::title {{
@@ -80,7 +80,7 @@ class RobotMainWindow(QMainWindow):
                 background-color: #0d7377;
                 border: none;
                 border-radius: 5px;
-                padding: 10px;
+                padding: 8px;
                 color: white;
                 font-weight: bold;
             }}
@@ -94,15 +94,15 @@ class RobotMainWindow(QMainWindow):
                 background-color: #c0392b;
             }}
             QSlider::groove:horizontal {{
-                height: 8px;
+                height: 6px;
                 background: {theme['border']};
-                border-radius: 4px;
+                border-radius: 3px;
             }}
             QSlider::handle:horizontal {{
                 background: {theme['primary']};
-                width: 18px;
+                width: 16px;
                 margin: -5px 0;
-                border-radius: 9px;
+                border-radius: 8px;
             }}
             QLabel#value {{
                 color: {theme['primary']};
@@ -134,6 +134,10 @@ class RobotMainWindow(QMainWindow):
                 border: 1px solid {theme['border']};
                 border-radius: 5px;
                 padding: 5px;
+            }}
+            QScrollArea {{
+                border: none;
+                background-color: transparent;
             }}
         """)
 
@@ -329,79 +333,99 @@ class RobotMainWindow(QMainWindow):
         return widget
 
     def create_joint_control_tab(self):
-        """創建關節控制標籤頁"""
+        """創建關節控制標籤頁 - 簡潔版本"""
         widget = QWidget()
         layout = QVBoxLayout()
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
 
-        # 關節滑桿區域
+        # 關節滑桿區域 - 使用滾動區域
         scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setContentsMargins(5, 5, 5, 5)
+        scroll_layout.setSpacing(4)
 
         for i in range(1, 7):
             joint_group = QGroupBox(f"關節 {i}")
             joint_layout = QVBoxLayout()
+            joint_layout.setContentsMargins(10, 8, 10, 6)
+            joint_layout.setSpacing(3)
 
             # 當前值顯示
             value_layout = QHBoxLayout()
+            value_layout.setSpacing(8)
+
             label = QLabel(f"J{i}:")
-            label.setMinimumWidth(30)
+            label.setMinimumWidth(25)
+            label.setStyleSheet("font-weight: bold; font-size: 13px;")
             value_layout.addWidget(label)
 
             value_label = QLabel("0.0°")
             value_label.setObjectName("value")
-            value_label.setAlignment(Qt.AlignRight)
+            value_label.setMinimumWidth(70)
+            value_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #3498db;")
             self.joint_labels[i] = value_label
             value_layout.addWidget(value_label)
+
             value_layout.addStretch()
-
-            # 範圍顯示
-            min_val, max_val = JOINT_LIMITS[f'J{i}']
-            range_label = QLabel(f"範圍: {min_val}° ~ {max_val}°")
-            range_label.setStyleSheet("color: #7f8c8d; font-size: 11px;")
-            value_layout.addWidget(range_label)
-
             joint_layout.addLayout(value_layout)
+
+            # 滑桿 + 範圍值
+            slider_layout = QHBoxLayout()
+            slider_layout.setSpacing(8)
+
+            # 最小值標籤
+            min_val, max_val = JOINT_LIMITS[f'J{i}']
+            min_label = QLabel(f"{min_val}°")
+            min_label.setStyleSheet("color: #7f8c8d; font-size: 10px;")
+            min_label.setMinimumWidth(40)
+            min_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            slider_layout.addWidget(min_label)
 
             # 滑桿
             slider = QSlider(Qt.Horizontal)
             slider.setMinimum(int(min_val))
             slider.setMaximum(int(max_val))
             slider.setValue(0)
+            slider.setMinimumHeight(30)
             slider.valueChanged.connect(lambda v, idx=i: self.on_joint_slider_changed(idx, v))
             self.joint_sliders[i] = slider
-            joint_layout.addWidget(slider)
+            slider_layout.addWidget(slider)
 
-            # 微調按鈕
-            fine_layout = QHBoxLayout()
-            minus_btn = QPushButton("-1°")
-            minus_btn.setMaximumWidth(50)
-            minus_btn.clicked.connect(lambda _, idx=i: self.fine_adjust_joint(idx, -1))
-            fine_layout.addWidget(minus_btn)
+            # 最大值標籤
+            max_label = QLabel(f"{max_val}°")
+            max_label.setStyleSheet("color: #7f8c8d; font-size: 10px;")
+            max_label.setMinimumWidth(40)
+            max_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            slider_layout.addWidget(max_label)
 
-            fine_layout.addStretch()
-
-            plus_btn = QPushButton("+1°")
-            plus_btn.setMaximumWidth(50)
-            plus_btn.clicked.connect(lambda _, idx=i: self.fine_adjust_joint(idx, 1))
-            fine_layout.addWidget(plus_btn)
-
-            joint_layout.addLayout(fine_layout)
+            joint_layout.addLayout(slider_layout)
 
             joint_group.setLayout(joint_layout)
+            joint_group.setMaximumHeight(95)  # 更緊湊的高度
             scroll_layout.addWidget(joint_group)
 
+        scroll_layout.addStretch()
         scroll.setWidget(scroll_widget)
         layout.addWidget(scroll)
 
         # 控制按鈕
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
 
         home_btn = QPushButton("🏠 回原點")
+        home_btn.setMinimumHeight(38)
         home_btn.clicked.connect(self.go_home)
         btn_layout.addWidget(home_btn)
 
         zero_btn = QPushButton("0️⃣ 全部歸零")
+        zero_btn.setMinimumHeight(38)
         zero_btn.clicked.connect(self.zero_all_joints)
         btn_layout.addWidget(zero_btn)
 
@@ -700,6 +724,8 @@ class RobotMainWindow(QMainWindow):
         """微調關節角度"""
         slider = self.joint_sliders[joint_idx]
         new_value = slider.value() + delta
+        min_val, max_val = JOINT_LIMITS[f'J{joint_idx}']
+        new_value = max(min_val, min(max_val, new_value))
         slider.setValue(new_value)
 
     def go_home(self):
@@ -882,19 +908,14 @@ class RobotMainWindow(QMainWindow):
         self.status_indicator.setText("● 緊急停止")
         self.status_indicator.setStyleSheet(f"color: {GUI_THEME['danger']}; font-size: 14px;")
 
-        # 顯示緊急停止對話框
         QMessageBox.critical(self, "緊急停止",
                            "機器人已緊急停止！\n請檢查系統後重新啟動。")
 
     def update_display(self):
         """定時更新顯示"""
-        # 更新當前位置
         self.update_position_display()
-
-        # 更新監控資訊
         self.update_monitor_info()
 
-        # 更新 3D 視覺化
         if self.vtk_widget:
             angles = [self.joint_sliders[i].value() for i in range(1, 7)]
             self.vtk_widget.update_robot_pose(angles)
@@ -918,14 +939,12 @@ class RobotMainWindow(QMainWindow):
                 "已連線" if status.get('connected', False) else "未連線"
             )
 
-            # 更新運行時間
             uptime = status.get('uptime', 0)
             hours = int(uptime // 3600)
             minutes = int((uptime % 3600) // 60)
             seconds = int(uptime % 60)
             self.monitor_labels["運行時間"].setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
 
-            # 更新其他監控資訊
             self.monitor_labels["CPU 使用率"].setText(f"{status.get('cpu_usage', 0):.1f}%")
             self.monitor_labels["記憶體使用"].setText(f"{status.get('memory_usage', 0):.0f} MB")
             self.monitor_labels["目前速度"].setText(f"{status.get('current_speed', 0):.1f} mm/s")
@@ -936,7 +955,6 @@ class RobotMainWindow(QMainWindow):
         timestamp = QDateTime.currentDateTime().toString("HH:mm:ss")
         self.log_text.append(f"[{timestamp}] {message}")
 
-        # 自動捲動到底部
         scrollbar = self.log_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
@@ -946,10 +964,8 @@ class RobotMainWindow(QMainWindow):
         warning_msg = f"[{timestamp}] ⚠ {message}"
         self.warning_list.addItem(warning_msg)
 
-        # 同時加入日誌
         self.add_log(f"⚠ 警告: {message}")
 
-        # 限制警告列表長度
         while self.warning_list.count() > 10:
             self.warning_list.takeItem(0)
 
@@ -987,79 +1003,12 @@ class RobotMainWindow(QMainWindow):
         )
 
         if reply == QMessageBox.Yes:
-            # 停止所有運動
             self.ctrl.stop_motion()
-
-            # 停止定時器
             self.update_timer.stop()
 
-            # 關閉 VTK widget
             if self.vtk_widget:
                 self.vtk_widget.close()
 
             event.accept()
         else:
             event.ignore()
-
-
-# ========== 測試主程式 ==========
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-
-    # 設定應用程式圖標
-    app.setWindowIcon(QIcon("assets/robot_icon.png"))
-
-    # 創建模擬控制器（測試用）
-    class MockController:
-        def __init__(self):
-            self.joint_angles = [0] * 6
-            self.current_position = {'x': 0, 'y': 0, 'z': 0, 'rx': 0, 'ry': 0, 'rz': 0}
-
-        def set_joint_angles(self, angles):
-            self.joint_angles = angles
-            return True
-
-        def get_current_position(self):
-            return self.current_position
-
-        def move_to_position(self, target, speed):
-            self.current_position.update(target)
-            return True
-
-        def linear_move(self, target, speed):
-            return True
-
-        def move_to_home(self):
-            self.joint_angles = [0] * 6
-            return True
-
-        def execute_trajectory(self, points, params):
-            return True
-
-        def pause_motion(self):
-            return True
-
-        def stop_motion(self):
-            return True
-
-        def emergency_stop(self):
-            return True
-
-        def get_system_status(self):
-            return {
-                'connected': True,
-                'uptime': 3661,
-                'cpu_usage': 35.2,
-                'memory_usage': 512,
-                'current_speed': 150.5,
-                'current_accel': 100.0
-            }
-
-    controller = MockController()
-
-    # 創建主視窗
-    window = RobotMainWindow(controller)
-    window.show()
-
-    sys.exit(app.exec_())

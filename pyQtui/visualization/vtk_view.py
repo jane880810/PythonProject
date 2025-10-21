@@ -367,8 +367,6 @@ class VTKWidget(QWidget):
             self.actors['p8'].SetUserTransform(self.matrix_to_vtk_transform(T_p8_final))
 
         # 更新末端標記（關節5位置）
-        # 關節5 = 基座旋轉 -> 移動到(-S1,0,L1) -> J2旋轉 -> 移動L2 -> J3旋轉 -> 移動S2 -> J4旋轉 -> 移動L3
-
         # 構建到關節5的變換
         T_to_joint5 = T1 @ T2 @ T3 @ T4
 
@@ -381,9 +379,6 @@ class VTKWidget(QWidget):
             joint5_global[1],
             joint5_global[2]
         )
-
-        # Debug: 打印關節5位置
-        # print(f"關節5位置: ({joint5_global[0]:.3f}, {joint5_global[1]:.3f}, {joint5_global[2]:.3f})")
 
         self.renderWindow.Render()
 
