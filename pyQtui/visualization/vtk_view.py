@@ -1,13 +1,13 @@
 """
 visualization/vtk_view.py
-VTK 3D 視覺化模組 - 完美嵌入 Qt
+VTK 3D 視覺化模組 - 完整運動學實現
 """
 
 import vtk
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from PyQt5.QtWidgets import QWidget, QVBoxLayout
 import numpy as np
-from config.robot_config import MODEL_CONFIG, DH_PARAMS  # 修正：使用 DH_PARAMS
+from config.robot_config import MODEL_CONFIG, DH_PARAMS, INITIAL_TRANSLATIONS, ROTATION_CENTERS
 
 
 class VTKWidget(QWidget):
@@ -23,11 +23,11 @@ class VTKWidget(QWidget):
         self.renderWindow = None
         self.interactor = None
 
-        # 演員（Actors）字典
+        # 部件演員和組
         self.actors = {}
-        self.meshes = []
+        self.assembly_groups = {}  # 用於層級變換
 
-        # 從配置讀取參數 - 修正變數名稱
+        # DH 參數
         self.S1 = DH_PARAMS['S1']
         self.S2 = DH_PARAMS['S2']
         self.L1 = DH_PARAMS['L1']
@@ -38,150 +38,130 @@ class VTKWidget(QWidget):
         # 末端標記
         self.joint5_marker = None
 
+        # 當前關節角度
+        self.current_angles = [0, 0, 0, 0, 0, 0]
+
         self.setup_vtk()
         self.load_scene()
 
     def setup_vtk(self):
         """設定 VTK 渲染器"""
-        # 創建佈局
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # 創建 VTK Widget
         self.vtkWidget = QVTKRenderWindowInteractor(self)
         layout.addWidget(self.vtkWidget)
         self.setLayout(layout)
 
-        # 創建渲染器
         self.renderer = vtk.vtkRenderer()
-        self.renderer.SetBackground(0.1, 0.1, 0.1)  # 深灰色背景
+        self.renderer.SetBackground(0.1, 0.1, 0.1)
 
-        # 創建渲染窗口
         self.renderWindow = self.vtkWidget.GetRenderWindow()
         self.renderWindow.AddRenderer(self.renderer)
 
-        # 創建交互器
         self.interactor = self.vtkWidget.GetRenderWindow().GetInteractor()
-
-        # 設定交互風格（可旋轉、縮放、平移）
         style = vtk.vtkInteractorStyleTrackballCamera()
         self.interactor.SetInteractorStyle(style)
-
-        # 初始化
         self.interactor.Initialize()
 
         print("✓ VTK 渲染器初始化完成")
 
     def load_scene(self):
         """載入場景"""
-        # 添加光源
         self.add_lights()
 
-        # 載入機械手臂模型
         success = self.load_robot_models()
-
         if not success:
-            # 使用簡化視覺化
             self.create_simple_robot()
 
-        # 添加環境
         self.add_environment()
-
-        # 創建末端標記
         self.create_joint5_marker()
-
-        # 設定相機
         self.setup_camera()
 
-        # 渲染
+        # 設定初始姿態
+        self.update_robot_pose([0, 0, 0, 0, 0, 0])
+
         self.renderWindow.Render()
 
     def add_lights(self):
         """添加光源"""
-        # 主光源
         light1 = vtk.vtkLight()
         light1.SetPosition(2, 2, 3)
         light1.SetIntensity(1.0)
-        light1.SetColor(1, 1, 1)
         self.renderer.AddLight(light1)
 
-        # 補光
         light2 = vtk.vtkLight()
         light2.SetPosition(-2, -2, 1)
         light2.SetIntensity(0.5)
         self.renderer.AddLight(light2)
 
+        light3 = vtk.vtkLight()
+        light3.SetPosition(0, 0, 2)
+        light3.SetIntensity(0.3)
+        self.renderer.AddLight(light3)
+
     def load_robot_models(self):
         """載入機械手臂 3D 模型"""
+        import os
+
         base_path = MODEL_CONFIG.get('obj_path', '/home/yahboom/Desktop/Obj/')
-        model_count = MODEL_CONFIG.get('model_count', 8)
-        model_prefix = MODEL_CONFIG.get('model_prefix', 'p')
-        model_extension = MODEL_CONFIG.get('model_extension', '.obj')
 
         print(f"正在從 {base_path} 載入模型...")
 
         loaded_count = 0
-        for i in range(1, model_count + 1):
-            model_file = f"{model_prefix}{i}{model_extension}"
-            full_path = base_path + model_file
+
+        for i in range(1, 9):
+            model_file = f"p{i}.obj"
+            full_path = os.path.join(base_path, model_file)
+
+            if not os.path.exists(full_path):
+                continue
 
             try:
-                # 檢查檔案是否存在
-                import os
-                if not os.path.exists(full_path):
-                    print(f"  ⚠ 檔案不存在: {full_path}")
-                    continue
-
-                # 讀取 OBJ 檔案
                 reader = vtk.vtkOBJReader()
                 reader.SetFileName(full_path)
                 reader.Update()
 
-                # 創建 Mapper
                 mapper = vtk.vtkPolyDataMapper()
                 mapper.SetInputConnection(reader.GetOutputPort())
 
-                # 創建 Actor
                 actor = vtk.vtkActor()
                 actor.SetMapper(mapper)
 
-                # 設定顏色（根據部件設定不同顏色）
+                # 設定顏色
                 if i == 1:
-                    actor.GetProperty().SetColor(0.5, 0.5, 0.5)  # 基座：灰色
+                    actor.GetProperty().SetColor(0.4, 0.4, 0.4)
                 else:
-                    actor.GetProperty().SetColor(0.7, 0.7, 0.7)  # 其他：淺灰
+                    actor.GetProperty().SetColor(0.65, 0.65, 0.65)
 
-                # 設定材質屬性
                 actor.GetProperty().SetSpecular(0.3)
                 actor.GetProperty().SetSpecularPower(20)
                 actor.GetProperty().SetAmbient(0.2)
                 actor.GetProperty().SetDiffuse(0.8)
 
-                # 添加到渲染器
                 self.renderer.AddActor(actor)
-
-                # 儲存引用
-                self.actors[f"part_{i}"] = actor
+                self.actors[f'p{i}'] = actor
                 loaded_count += 1
 
             except Exception as e:
-                print(f"  ⚠ 無法載入 {model_file}: {e}")
+                print(f"  ✗ {model_file}: {e}")
 
         if loaded_count > 0:
-            print(f"✓ 已載入 {loaded_count} 個模型")
+            print(f"✓ 成功載入 {loaded_count} 個模型")
             return True
-        else:
-            print("⚠ 無法載入任何模型，使用簡化視覺化")
-            return False
+        return False
 
     def create_simple_robot(self):
-        """創建簡化的機械手臂視覺化"""
-        print("使用簡化視覺化模式...")
+        """簡化視覺化"""
+        base = self.create_cylinder(0.1, 0.23, (0.5, 0.5, 0.5))
+        self.renderer.AddActor(base)
+        self.actors["p1"] = base
 
-        # 基座（圓柱）
+    def create_cylinder(self, radius, height, color):
+        """創建圓柱體"""
         cylinder = vtk.vtkCylinderSource()
-        cylinder.SetRadius(0.1)
-        cylinder.SetHeight(0.2)
+        cylinder.SetRadius(radius)
+        cylinder.SetHeight(height)
         cylinder.SetResolution(32)
 
         mapper = vtk.vtkPolyDataMapper()
@@ -189,53 +169,14 @@ class VTKWidget(QWidget):
 
         actor = vtk.vtkActor()
         actor.SetMapper(mapper)
-        actor.GetProperty().SetColor(0.5, 0.5, 0.5)
+        actor.GetProperty().SetColor(*color)
 
-        self.renderer.AddActor(actor)
-        self.actors["base"] = actor
-
-        # 連桿 1（垂直）
-        link1 = vtk.vtkCylinderSource()
-        link1.SetRadius(0.05)
-        link1.SetHeight(self.L1)
-        link1.SetResolution(16)
-
-        mapper1 = vtk.vtkPolyDataMapper()
-        mapper1.SetInputConnection(link1.GetOutputPort())
-
-        actor1 = vtk.vtkActor()
-        actor1.SetMapper(mapper1)
-        actor1.GetProperty().SetColor(0.3, 0.6, 0.8)
-        actor1.SetPosition(0, 0, self.L1 / 2)
-
-        self.renderer.AddActor(actor1)
-        self.actors["link1"] = actor1
-
-        # 連桿 2
-        link2 = vtk.vtkCylinderSource()
-        link2.SetRadius(0.04)
-        link2.SetHeight(self.L2)
-        link2.SetResolution(16)
-
-        mapper2 = vtk.vtkPolyDataMapper()
-        mapper2.SetInputConnection(link2.GetOutputPort())
-
-        actor2 = vtk.vtkActor()
-        actor2.SetMapper(mapper2)
-        actor2.GetProperty().SetColor(0.2, 0.7, 0.9)
-        # 初始位置在 link1 頂端
-        actor2.SetPosition(0, 0, self.L1 + self.L2 / 2)
-
-        self.renderer.AddActor(actor2)
-        self.actors["link2"] = actor2
-
-        print("✓ 簡化視覺化已創建")
+        return actor
 
     def create_joint5_marker(self):
-        """創建關節 5 末端標記"""
-        # 創建球體
+        """創建末端標記"""
         sphere = vtk.vtkSphereSource()
-        sphere.SetRadius(0.08)
+        sphere.SetRadius(0.065)  # 放大到 1.3 倍 (0.05 * 1.3 = 0.065)
         sphere.SetThetaResolution(32)
         sphere.SetPhiResolution(32)
 
@@ -244,61 +185,224 @@ class VTKWidget(QWidget):
 
         self.joint5_marker = vtk.vtkActor()
         self.joint5_marker.SetMapper(mapper)
-        self.joint5_marker.GetProperty().SetColor(1.0, 0.0, 0.0)  # 紅色
-
-        # 設定初始位置
-        try:
-            pos = self.ctrl.get_joint5_position()
-            self.joint5_marker.SetPosition(pos[0], pos[1], pos[2])
-        except:
-            # 如果獲取失敗，設定預設位置
-            self.joint5_marker.SetPosition(0, 0, self.L1 + self.L2)
+        self.joint5_marker.GetProperty().SetColor(1.0, 0.0, 0.0)
 
         self.renderer.AddActor(self.joint5_marker)
 
-    def update_joint5_marker(self):
-        """更新關節 5 標記位置"""
-        if self.joint5_marker:
-            try:
-                pos = self.ctrl.get_joint5_position()
-                self.joint5_marker.SetPosition(pos[0], pos[1], pos[2])
-                self.renderWindow.Render()
-            except:
-                pass
+    def matrix_to_vtk_transform(self, matrix_4x4):
+        """將 4x4 numpy 矩陣轉換為 vtkTransform"""
+        transform = vtk.vtkTransform()
+        vtk_matrix = vtk.vtkMatrix4x4()
+
+        for i in range(4):
+            for j in range(4):
+                vtk_matrix.SetElement(i, j, matrix_4x4[i, j])
+
+        transform.SetMatrix(vtk_matrix)
+        return transform
 
     def update_robot_pose(self, joint_angles):
         """
-        更新機器人姿態
+        更新機器人姿態 - 使用正確的 DH 變換
         Args:
-            joint_angles: 6個關節角度列表 [J1, J2, J3, J4, J5, J6]
+            joint_angles: [θ1, θ2, θ3, θ4, θ5, θ6] (度)
         """
-        # 更新末端標記
-        self.update_joint5_marker()
+        self.current_angles = joint_angles
 
-        # 如果有載入完整模型，這裡可以更新各部件的旋轉
-        # 目前簡化版本只更新末端標記
+        # 先更新 controller 的角度，讓它計算正確的關節5位置
+        try:
+            self.ctrl.current_angles = joint_angles
+        except:
+            pass
+
+        # 轉換為弧度
+        theta = [np.deg2rad(a) for a in joint_angles]
+
+        # ========== 構建變換矩陣 ==========
+
+        # 基座變換 (theta1 繞 Z 軸)
+        T1 = np.eye(4)
+        c1, s1 = np.cos(theta[0]), np.sin(theta[0])
+        T1[:3, :3] = np.array([
+            [c1, -s1, 0],
+            [s1,  c1, 0],
+            [0,   0,  1]
+        ])
+
+        # 關節 2 變換 (theta2 繞 Y 軸，在 L1 高度)
+        T2 = np.eye(4)
+        T2[:3, 3] = [-self.S1, 0, self.L1]
+        c2, s2 = np.cos(theta[1]), np.sin(theta[1])
+        R2 = np.array([
+            [ c2, 0, s2],
+            [ 0,  1, 0],
+            [-s2, 0, c2]
+        ])
+        T2[:3, :3] = R2
+
+        # 關節 3 變換 (theta3 繞 Y 軸，在 L2 處，有 -90° 偏移)
+        T3 = np.eye(4)
+        T3[:3, 3] = [0, 0, self.L2]
+        c3, s3 = np.cos(theta[2] - np.pi/2), np.sin(theta[2] - np.pi/2)
+        R3 = np.array([
+            [ c3, 0, s3],
+            [ 0,  1, 0],
+            [-s3, 0, c3]
+        ])
+        T3[:3, :3] = R3
+
+        # 關節 4 變換 (theta4 繞 Z 軸，在 S2 處)
+        T4 = np.eye(4)
+        T4[:3, 3] = [self.S2, 0, 0]
+        c4, s4 = np.cos(theta[3]), np.sin(theta[3])
+        R4 = np.array([
+            [c4, -s4, 0],
+            [s4,  c4, 0],
+            [0,   0,  1]
+        ])
+        T4[:3, :3] = R4
+
+        # 關節 5 變換 (theta5 繞 Y 軸，在 L3 處，初始 -90°)
+        T5 = np.eye(4)
+        T5[:3, 3] = [0, 0, self.L3]
+        c5, s5 = np.cos(theta[4] - np.pi/2), np.sin(theta[4] - np.pi/2)
+        R5 = np.array([
+            [ c5, 0, s5],
+            [ 0,  1, 0],
+            [-s5, 0, c5]
+        ])
+        T5[:3, :3] = R5
+
+        # 關節 6 變換 (theta6 繞局部 Z 軸旋轉)
+        T6 = np.eye(4)
+        # 不添加位移，只有旋轉
+        c6, s6 = np.cos(theta[5]), np.sin(theta[5])
+        R6 = np.array([
+            [c6, -s6, 0],
+            [s6,  c6, 0],
+            [0,   0,  1]
+        ])
+        T6[:3, :3] = R6
+
+        # ========== 計算累積變換 ==========
+
+        # P1 (基座) - 使用初始平移
+        if 'p1' in self.actors:
+            transform = vtk.vtkTransform()
+            tx, ty, tz = INITIAL_TRANSLATIONS.get('p1', (0, 0, 0))
+            transform.Translate(tx, ty, tz)
+            self.actors['p1'].SetUserTransform(transform)
+
+        # P2 - 受 theta1 影響
+        if 'p2' in self.actors:
+            T_p2 = T1.copy()
+            tx, ty, tz = INITIAL_TRANSLATIONS.get('p2', (0, 0, 0.23))
+            T_p2[:3, 3] += np.array([tx, ty, tz])
+            self.actors['p2'].SetUserTransform(self.matrix_to_vtk_transform(T_p2))
+
+        # P3 - 受 theta1, theta2 影響
+        if 'p3' in self.actors:
+            T_p3 = T1 @ T2
+            tx, ty, tz = INITIAL_TRANSLATIONS.get('p3', (-0.03, 0, 0.375))
+            # 在局部座標系中添加偏移
+            offset = np.array([tx + self.S1, ty, tz - self.L1])
+            T_p3[:3, 3] += T_p3[:3, :3] @ offset
+            self.actors['p3'].SetUserTransform(self.matrix_to_vtk_transform(T_p3))
+
+        # P4 - 受 theta1, theta2, theta3 影響
+        if 'p4' in self.actors:
+            T_p4 = T1 @ T2 @ T3
+            tx, ty, tz = INITIAL_TRANSLATIONS.get('p4', (-0.03, 0, 0.715))
+            offset = np.array([tx + self.S1, ty, tz - self.L1 - self.L2])
+            T_p4[:3, 3] += T_p4[:3, :3] @ offset
+            self.actors['p4'].SetUserTransform(self.matrix_to_vtk_transform(T_p4))
+
+        # P5 - 受 theta1~4 影響
+        if 'p5' in self.actors:
+            T_p5 = T1 @ T2 @ T3 @ T4
+            tx, ty, tz = INITIAL_TRANSLATIONS.get('p5', (0.01, 0, 0.81))
+            offset = np.array([tx + self.S1 - self.S2, ty, tz - self.L1 - self.L2])
+            T_p5[:3, 3] += T_p5[:3, :3] @ offset
+            self.actors['p5'].SetUserTransform(self.matrix_to_vtk_transform(T_p5))
+
+        # P6 - 受 theta1~5 影響
+        if 'p6' in self.actors:
+            T_p6 = T1 @ T2 @ T3 @ T4 @ T5
+            tx, ty, tz = INITIAL_TRANSLATIONS.get('p6', (0.01, 0, 1.053))
+            offset = np.array([tx + self.S1 - self.S2, ty, tz - self.L1 - self.L2 - self.L3])
+            T_p6[:3, 3] += T_p6[:3, :3] @ offset
+            self.actors['p6'].SetUserTransform(self.matrix_to_vtk_transform(T_p6))
+
+        # P7 - 受 theta1~5 影響
+        if 'p7' in self.actors:
+            T_p7 = T1 @ T2 @ T3 @ T4 @ T5
+            tx, ty, tz = INITIAL_TRANSLATIONS.get('p7', (0.01, 0, 1.12))
+            offset = np.array([tx + self.S1 - self.S2, ty, tz - self.L1 - self.L2 - self.L3])
+            T_p7[:3, 3] += T_p7[:3, :3] @ offset
+            self.actors['p7'].SetUserTransform(self.matrix_to_vtk_transform(T_p7))
+
+        # P8 (末端執行器) - 繞自身中心的局部 Z 軸旋轉
+        if 'p8' in self.actors:
+            # 計算到 P8 位置的變換（不含 theta6）
+            T_p8_base = T1 @ T2 @ T3 @ T4 @ T5
+
+            # 獲取 P8 的初始平移
+            tx, ty, tz = INITIAL_TRANSLATIONS.get('p8', (0.01, 0, 1.1395))
+
+            # 在局部座標系中的偏移（相對於關節5）
+            local_offset = np.array([tx + self.S1 - self.S2, ty, tz - self.L1 - self.L2 - self.L3, 1])
+
+            # 轉換到全局座標
+            global_offset = T_p8_base @ local_offset
+
+            # 構建最終變換：先移動到正確位置，然後繞自身 Z 軸旋轉
+            T_p8_final = T_p8_base.copy()
+
+            # 應用 theta6 旋轉（在局部 Z 軸）
+            T_p8_final[:3, :3] = T_p8_final[:3, :3] @ T6[:3, :3]
+
+            # 設定位置（使用計算出的全局偏移）
+            T_p8_final[:3, 3] = global_offset[:3]
+
+            self.actors['p8'].SetUserTransform(self.matrix_to_vtk_transform(T_p8_final))
+
+        # 更新末端標記（關節5位置）
+        # 關節5 = 基座旋轉 -> 移動到(-S1,0,L1) -> J2旋轉 -> 移動L2 -> J3旋轉 -> 移動S2 -> J4旋轉 -> 移動L3
+
+        # 構建到關節5的變換
+        T_to_joint5 = T1 @ T2 @ T3 @ T4
+
+        # 關節5在局部座標系的 (0, 0, L3) 位置
+        joint5_local = np.array([0, 0, self.L3, 1])
+        joint5_global = T_to_joint5 @ joint5_local
+
+        self.joint5_marker.SetPosition(
+            joint5_global[0],
+            joint5_global[1],
+            joint5_global[2]
+        )
+
+        # Debug: 打印關節5位置
+        # print(f"關節5位置: ({joint5_global[0]:.3f}, {joint5_global[1]:.3f}, {joint5_global[2]:.3f})")
 
         self.renderWindow.Render()
 
     def add_environment(self):
-        """添加環境物件"""
-        # 添加座標軸
+        """添加環境"""
         axes = vtk.vtkAxesActor()
         axes.SetTotalLength(0.3, 0.3, 0.3)
         axes.SetShaftTypeToCylinder()
-        axes.SetCylinderRadius(0.02)
+        axes.SetCylinderRadius(0.01)
         self.renderer.AddActor(axes)
 
-        # 添加網格地板
         self.add_grid()
 
     def add_grid(self, size=2.0, divisions=20):
-        """添加網格地板"""
-        # 創建平面
+        """網格地板"""
         plane = vtk.vtkPlaneSource()
-        plane.SetOrigin(-size / 2, -size / 2, 0)
-        plane.SetPoint1(size / 2, -size / 2, 0)
-        plane.SetPoint2(-size / 2, size / 2, 0)
+        plane.SetOrigin(-size/2, -size/2, 0)
+        plane.SetPoint1(size/2, -size/2, 0)
+        plane.SetPoint2(-size/2, size/2, 0)
         plane.SetXResolution(divisions)
         plane.SetYResolution(divisions)
 
@@ -314,15 +418,15 @@ class VTKWidget(QWidget):
         self.renderer.AddActor(actor)
 
     def setup_camera(self):
-        """設定相機視角"""
+        """設定相機"""
         camera = self.renderer.GetActiveCamera()
-        camera.SetPosition(1.5, 1.5, 1.5)
-        camera.SetFocalPoint(0, 0, 0.5)
+        camera.SetPosition(1.5, 1.5, 1.2)
+        camera.SetFocalPoint(0, 0, 0.6)
         camera.SetViewUp(0, 0, 1)
         self.renderer.ResetCamera()
 
     def reset_camera(self):
-        """重置相機視角"""
+        """重置相機"""
         self.setup_camera()
         self.renderWindow.Render()
 
@@ -331,22 +435,22 @@ class VTKWidget(QWidget):
         camera = self.renderer.GetActiveCamera()
 
         if view_type == "top":
-            camera.SetPosition(0, 0, 2)
-            camera.SetFocalPoint(0, 0, 0)
+            camera.SetPosition(0, 0, 2.5)
+            camera.SetFocalPoint(0, 0, 0.5)
             camera.SetViewUp(0, 1, 0)
         elif view_type == "side":
-            camera.SetPosition(2, 0, 0.5)
-            camera.SetFocalPoint(0, 0, 0.5)
+            camera.SetPosition(2.5, 0, 0.8)
+            camera.SetFocalPoint(0, 0, 0.8)
             camera.SetViewUp(0, 0, 1)
         elif view_type == "front":
-            camera.SetPosition(0, 2, 0.5)
-            camera.SetFocalPoint(0, 0, 0.5)
+            camera.SetPosition(0, 2.5, 0.8)
+            camera.SetFocalPoint(0, 0, 0.8)
             camera.SetViewUp(0, 0, 1)
 
         self.renderer.ResetCamera()
         self.renderWindow.Render()
 
     def render(self):
-        """手動渲染"""
+        """渲染"""
         if self.renderWindow:
             self.renderWindow.Render()
