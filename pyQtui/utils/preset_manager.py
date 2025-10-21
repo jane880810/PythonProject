@@ -1,367 +1,311 @@
 """
-core/controller.py
-機械手臂控制器
+utils/preset_manager.py
+預設姿態管理器
 """
 
-import numpy as np
-import time
-
-# 從配置檔案匯入參數 - 修正變數名稱
-from config.robot_config import DH_PARAMS, JOINT_LIMITS  # 改正：不是 ROBOT_DH_PARAMS
+import json
+import os
+from datetime import datetime
 
 
-class AnimationController:
-    """機械手臂動畫控制器"""
+class PresetManager:
+    """預設姿態管理器"""
 
-    def __init__(self):
-        # 從配置讀取 DH 參數
-        self.S1 = DH_PARAMS['S1']  # 改正：使用 DH_PARAMS
-        self.S2 = DH_PARAMS['S2']
-        self.L1 = DH_PARAMS['L1']
-        self.L2 = DH_PARAMS['L2']
-        self.L3 = DH_PARAMS['L3']
-        self.L4 = DH_PARAMS['L4']
+    def __init__(self, preset_file='presets.json'):
+        """
+        初始化預設管理器
+        Args:
+            preset_file: 預設檔案名稱
+        """
+        # 預設檔案路徑
+        self.preset_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+        self.preset_file = os.path.join(self.preset_dir, preset_file)
 
-        self.current_angles = [0, 0, 0, 0, 0, 0]
-        self.target_angles = [0, 0, 0, 0, 0, 0]
-        self.animation_speed = 0.12
-        self.is_animating = False
-        self.joint_scales = []  # GUI 滑桿引用
+        # 確保資料目錄存在
+        if not os.path.exists(self.preset_dir):
+            os.makedirs(self.preset_dir)
 
-        # 旋轉矩陣（用於 3D 視覺化，目前簡化）
-        self.R_p2_total = np.eye(3)
-        self.R_p3_total = np.eye(3)
-        self.R_p4_total = np.eye(3)
-        self.R_p5_total = np.eye(3)
-        self.R_p6_total = np.eye(3)
-        self.R_p8_total = np.eye(3)
+        # 載入預設
+        self.presets = self.load_all_presets()
 
-        # 局部座標向量
-        self.p3_base_local = np.array([-self.S1, 0, self.L1])
-        self.p3_length_vec = np.array([0, 0, self.L2])
-        self.p4_length_vec = np.array([self.S2, 0, 0])
-        self.p5_length_vec = np.array([0, 0, self.L3])
-        self.p6_length_vec = np.array([0, 0, 0.067])
-        self.p7_length_vec = np.array([0, 0, -0.067])
-        self.p8_center_offset = np.array([self.L4, 0, 0])
+        # 如果沒有預設，創建一些內建預設
+        if not self.presets:
+            self.create_default_presets()
 
-        # 軌跡相關
-        self.joint5_marker = None
-        self.trajectory_line = None
-        self.trajectory_points = None
-        self.is_following_trajectory = False
-        self.trajectory_index = 0
-        self.trajectory_delay = 0.005
-        self.last_trajectory_time = 0
-        self.skip_unreachable_points = True
-        self.skipped_points_count = 0
+        print("✓ PresetManager 初始化完成")
 
-        # 新增：支援 main_window 的方法
-        self.current_position = {'x': 0, 'y': 0, 'z': 0, 'rx': 0, 'ry': 0, 'rz': 0}
-        self.system_status = {
-            'connected': True,
-            'uptime': 0,
-            'cpu_usage': 0,
-            'memory_usage': 0,
-            'current_speed': 0,
-            'current_accel': 0
+    def create_default_presets(self):
+        """創建內建預設姿態"""
+        default_presets = {
+            '原點': {
+                'joint_angles': [0, 0, 0, 0, 0, 0],
+                'position': {'x': 0, 'y': 0, 'z': 0, 'rx': 0, 'ry': 0, 'rz': 0},
+                'description': '機械手臂原點姿態',
+                'timestamp': datetime.now().isoformat()
+            },
+            '垂直': {
+                'joint_angles': [0, -90, 90, 0, 0, 0],
+                'position': {'x': 0, 'y': 0, 'z': 0, 'rx': 0, 'ry': 0, 'rz': 0},
+                'description': '垂直向上姿態',
+                'timestamp': datetime.now().isoformat()
+            },
+            '水平': {
+                'joint_angles': [0, 0, 0, 0, -90, 0],
+                'position': {'x': 0, 'y': 0, 'z': 0, 'rx': 0, 'ry': 0, 'rz': 0},
+                'description': '水平伸展姿態',
+                'timestamp': datetime.now().isoformat()
+            },
+            '收納': {
+                'joint_angles': [0, -45, 135, 0, -90, 0],
+                'position': {'x': 0, 'y': 0, 'z': 0, 'rx': 0, 'ry': 0, 'rz': 0},
+                'description': '收納姿態',
+                'timestamp': datetime.now().isoformat()
+            }
         }
-        self.start_time = time.time()
 
-        print("✓ AnimationController 初始化完成")
+        self.presets = default_presets
+        self.save_all_presets()
+        print("✓ 已創建內建預設姿態")
 
-    # ===== 新增的方法支援 main_window =====
+    def load_all_presets(self):
+        """載入所有預設"""
+        if not os.path.exists(self.preset_file):
+            return {}
 
-    def set_joint_angles(self, angles):
-        """設定關節角度"""
-        for i, angle in enumerate(angles):
-            if i < 6:
-                self.set_target(i, angle)
-        return True
+        try:
+            with open(self.preset_file, 'r', encoding='utf-8') as f:
+                presets = json.load(f)
+            print(f"✓ 已載入 {len(presets)} 個預設姿態")
+            return presets
+        except Exception as e:
+            print(f"⚠ 載入預設失敗: {e}")
+            return {}
 
-    def get_current_position(self):
-        """取得當前位置"""
-        # 使用 FK 計算當前位置
-        from core.kinematics import Kinematics
-        kin = Kinematics()
-        pos = kin.forward_kinematics(self.current_angles)
-        self.current_position = pos
-        return self.current_position
+    def save_all_presets(self):
+        """儲存所有預設"""
+        try:
+            with open(self.preset_file, 'w', encoding='utf-8') as f:
+                json.dump(self.presets, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"✗ 儲存預設失敗: {e}")
+            return False
 
-    def move_to_position(self, target, speed):
-        """移動到目標位置"""
-        x = target.get('x', 0) / 1000.0  # mm to m
-        y = target.get('y', 0) / 1000.0
-        z = target.get('z', 0) / 1000.0
+    def save_preset(self, name, data):
+        """
+        儲存預設姿態
+        Args:
+            name: 預設名稱
+            data: 預設資料字典，應包含:
+                - joint_angles: 關節角度列表
+                - position: 位置字典 (可選)
+                - description: 描述 (可選)
+        Returns:
+            bool: 是否成功
+        """
+        # 添加時間戳記
+        if 'timestamp' not in data:
+            data['timestamp'] = datetime.now().isoformat()
 
-        success, msg = self.move_to(x, y, z)
+        # 儲存到記憶體
+        self.presets[name] = data
+
+        # 寫入檔案
+        success = self.save_all_presets()
+
+        if success:
+            print(f"✓ 已儲存預設: {name}")
+
         return success
 
-    def linear_move(self, target, speed):
-        """直線移動"""
-        # 簡化實作
-        return self.move_to_position(target, speed)
+    def load_preset(self, name):
+        """
+        載入預設姿態
+        Args:
+            name: 預設名稱
+        Returns:
+            dict: 預設資料，如果不存在返回 None
+        """
+        preset = self.presets.get(name)
 
-    def move_to_home(self):
-        """回到原點"""
-        self.reset_pose()
-        return True
+        if preset:
+            print(f"✓ 已載入預設: {name}")
+        else:
+            print(f"⚠ 預設不存在: {name}")
 
-    def execute_trajectory(self, points, params):
-        """執行軌跡"""
-        # 轉換點格式
-        traj_points = []
-        for p in points:
-            traj_points.append([
-                p['x'] / 1000.0,
-                p['y'] / 1000.0,
-                p['z'] / 1000.0
-            ])
-        self.start_trajectory(traj_points)
-        return True
+        return preset
 
-    def pause_motion(self):
-        """暫停運動"""
-        self.is_animating = False
-        self.is_following_trajectory = False
-        return True
+    def delete_preset(self, name):
+        """
+        刪除預設姿態
+        Args:
+            name: 預設名稱
+        Returns:
+            bool: 是否成功
+        """
+        if name not in self.presets:
+            print(f"⚠ 預設不存在: {name}")
+            return False
 
-    def stop_motion(self):
-        """停止運動"""
-        self.stop_trajectory()
-        self.is_animating = False
-        return True
+        # 從記憶體刪除
+        del self.presets[name]
 
-    def emergency_stop(self):
-        """緊急停止"""
-        self.stop_motion()
-        print("⚠ 緊急停止！")
-        return True
+        # 更新檔案
+        success = self.save_all_presets()
 
-    def get_system_status(self):
-        """取得系統狀態"""
-        self.system_status['uptime'] = time.time() - self.start_time
-        self.system_status['cpu_usage'] = np.random.uniform(20, 40)  # 模擬值
-        self.system_status['memory_usage'] = np.random.uniform(400, 600)
-        self.system_status['current_speed'] = np.random.uniform(100, 200)
-        self.system_status['current_accel'] = np.random.uniform(80, 120)
-        return self.system_status
+        if success:
+            print(f"✓ 已刪除預設: {name}")
 
-    # ===== 原有的方法 =====
+        return success
 
-    def set_marker(self, marker):
-        """設定關節 5 標記（用於 3D 視覺化）"""
-        self.joint5_marker = marker
+    def get_all_preset_names(self):
+        """
+        取得所有預設名稱
+        Returns:
+            list: 預設名稱列表
+        """
+        return list(self.presets.keys())
 
-    def get_joint5_position(self):
-        """取得關節 5（末端）位置"""
-        return self.R_p2_total @ (
-            self.p3_base_local +
-            self.R_p3_total @ (
-                self.p3_length_vec +
-                self.R_p4_total @ (
-                    self.p4_length_vec +
-                    self.R_p5_total @ self.p5_length_vec
-                )
-            )
-        )
+    def get_preset_count(self):
+        """
+        取得預設數量
+        Returns:
+            int: 預設數量
+        """
+        return len(self.presets)
 
-    def update_joint5_marker(self):
-        """更新關節 5 標記（3D 視覺化用）"""
-        # 這部分需要 Open3D 和 vis 物件
-        # 暫時註解掉，如需使用請整合 Open3D
-        pass
+    def rename_preset(self, old_name, new_name):
+        """
+        重新命名預設
+        Args:
+            old_name: 舊名稱
+            new_name: 新名稱
+        Returns:
+            bool: 是否成功
+        """
+        if old_name not in self.presets:
+            print(f"⚠ 預設不存在: {old_name}")
+            return False
 
-    def update_joint(self, joint_idx, delta_angle):
-        """更新關節角度（3D 視覺化用）"""
-        # 這部分需要 Open3D 的 node 物件
-        # 暫時簡化，只更新角度
-        if abs(delta_angle) < 0.0001:
-            return
+        if new_name in self.presets:
+            print(f"⚠ 預設名稱已存在: {new_name}")
+            return False
 
-        # 這裡可以加入實際的機械手臂通訊程式碼
-        # 例如：發送命令到實體機械手臂
-        pass
+        # 複製資料
+        self.presets[new_name] = self.presets[old_name]
 
-    def animate(self):
-        """動畫更新循環"""
-        # 處理軌跡跟踪
-        if self.is_following_trajectory:
-            current_time = time.time()
-            if current_time - self.last_trajectory_time >= self.trajectory_delay:
-                self.last_trajectory_time = current_time
-                self.move_next_point()
-            return
+        # 刪除舊資料
+        del self.presets[old_name]
 
-        # 處理手動關節控制
-        if not self.is_animating:
-            return
+        # 儲存
+        success = self.save_all_presets()
 
-        moved = False
-        for i in range(6):
-            if abs(self.current_angles[i] - self.target_angles[i]) > 0.01:
-                old = self.current_angles[i]
-                diff = self.target_angles[i] - old
-                self.current_angles[i] = old + diff * self.animation_speed
-                # self.update_joint(i, self.current_angles[i] - old)
-                moved = True
+        if success:
+            print(f"✓ 已重新命名: {old_name} -> {new_name}")
 
-        if not moved:
-            self.is_animating = False
+        return success
 
-    def set_target(self, joint_idx, angle):
-        """設定目標角度"""
-        self.target_angles[joint_idx] = angle
-        self.is_animating = True
-
-    def fk(self, angles):
-        """正向運動學"""
-        # 使用簡化版本，不依賴 Open3D
-        theta1 = np.deg2rad(angles[0])
-        theta2 = np.deg2rad(angles[1])
-        theta3 = np.deg2rad(angles[2])
-        theta4 = np.deg2rad(angles[3])
-
-        # 簡化的 FK 計算
-        x = (self.L2 + self.L3) * np.cos(theta2 + theta3) * np.cos(theta1)
-        y = (self.L2 + self.L3) * np.cos(theta2 + theta3) * np.sin(theta1)
-        z = self.L1 + (self.L2 + self.L3) * np.sin(theta2 + theta3)
-
-        return np.array([x, y, z])
-
-    def ik(self, x, y, z):
-        """逆向運動學"""
+    def export_presets(self, export_file):
+        """
+        匯出預設到檔案
+        Args:
+            export_file: 匯出檔案路徑
+        Returns:
+            bool: 是否成功
+        """
         try:
-            theta1 = np.arctan2(-y, -x)
-            r_xy = np.sqrt(y**2 + x**2)
-            z_off = z - self.L1
-            r_off = r_xy - self.S1
+            with open(export_file, 'w', encoding='utf-8') as f:
+                json.dump(self.presets, f, indent=2, ensure_ascii=False)
+            print(f"✓ 已匯出預設到: {export_file}")
+            return True
+        except Exception as e:
+            print(f"✗ 匯出失敗: {e}")
+            return False
 
-            if abs(r_off) < 1e-6:
-                return None, "err"
+    def import_presets(self, import_file, overwrite=False):
+        """
+        從檔案匯入預設
+        Args:
+            import_file: 匯入檔案路徑
+            overwrite: 是否覆蓋現有預設
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            with open(import_file, 'r', encoding='utf-8') as f:
+                imported_presets = json.load(f)
 
-            alpha = np.arctan2(z_off, r_off)
-            d = np.sqrt(r_off**2 + z_off**2)
-            L45 = np.sqrt(self.S2**2 + self.L3**2)
+            if overwrite:
+                # 完全覆蓋
+                self.presets = imported_presets
+            else:
+                # 合併（保留現有的，只添加新的）
+                for name, data in imported_presets.items():
+                    if name not in self.presets:
+                        self.presets[name] = data
 
-            if d > self.L2 + L45 or d < abs(self.L2 - L45):
-                return None, "reach"
+            # 儲存
+            success = self.save_all_presets()
 
-            cb = np.clip((self.L2**2 + d**2 - L45**2) / (2*self.L2*d), -1, 1)
-            beta = np.arccos(cb)
-            theta2 = -np.pi/2 + alpha + beta
+            if success:
+                print(f"✓ 已匯入 {len(imported_presets)} 個預設")
 
-            phi = np.arctan2(self.S2, self.L3)
-            cg = np.clip((self.L2**2 + L45**2 - d**2) / (2*self.L2*L45), -1, 1)
-            gamma = np.arccos(cg)
-            theta3 = -np.pi/2 - phi + gamma
-
-            angles = [np.rad2deg(theta1), np.rad2deg(theta2), np.rad2deg(theta3), 0]
-
-            # 檢查關節限制
-            limits = [(-165, 165), (-125, 85), (-55, 185), (-190, 190)]
-            for i, (a, (mn, mx)) in enumerate(zip(angles, limits)):
-                if a < mn or a > mx:
-                    return None, "limit"
-
-            return angles, "ok"
+            return success
 
         except Exception as e:
-            return None, "err"
+            print(f"✗ 匯入失敗: {e}")
+            return False
 
-    def move_to(self, x, y, z):
-        """移動到指定位置（使用動畫）"""
-        res = self.ik(x, y, z)
-        if res[0] is None:
-            return False, res[1]
-
-        angles = res[0]
-        for i in range(4):
-            self.set_target(i, angles[i])
-
-        return True, "ok"
-
-    def move_to_instant(self, x, y, z):
-        """直接移動到目標位置（不使用動畫）"""
-        res = self.ik(x, y, z)
-        if res[0] is None:
-            return False, res[1]
-
-        angles = res[0]
-
-        # 直接設置角度
-        for i in range(4):
-            delta = angles[i] - self.current_angles[i]
-            self.current_angles[i] = angles[i]
-            self.target_angles[i] = angles[i]
-
-        return True, "ok"
-
-    def show_trajectory(self, points):
-        """顯示軌跡（3D 視覺化用）"""
-        # 需要 Open3D，暫時跳過
-        pass
-
-    def start_trajectory(self, points):
-        """開始執行軌跡"""
-        self.trajectory_points = points
-        self.trajectory_index = 0
-        self.skipped_points_count = 0
-        self.is_following_trajectory = True
-        self.last_trajectory_time = time.time()
-        # self.show_trajectory(points)
-        print(f"✓ 開始執行軌跡，共 {len(points)} 點")
-        self.move_next_point()
-
-    def move_next_point(self):
-        """移動到軌跡的下一個點"""
-        if not self.is_following_trajectory or self.trajectory_points is None:
-            return
-
-        if self.trajectory_index >= len(self.trajectory_points):
-            if self.skipped_points_count > 0:
-                print(f"\n✓ 軌跡完成! 總點數: {len(self.trajectory_points)}, 跳過: {self.skipped_points_count}")
-            else:
-                print(f"\n✓ 軌跡完成! 總點數: {len(self.trajectory_points)}")
-            self.is_following_trajectory = False
-            self.skipped_points_count = 0
-            return
-
-        pt = self.trajectory_points[self.trajectory_index]
-        ok, msg = self.move_to_instant(pt[0], pt[1], pt[2])
-
-        if ok:
-            self.trajectory_index += 1
-            if self.trajectory_index % 100 == 0:
-                print(f"進度: {self.trajectory_index}/{len(self.trajectory_points)}")
-        else:
-            if self.skip_unreachable_points:
-                self.skipped_points_count += 1
-                self.trajectory_index += 1
-
-                if self.skipped_points_count > len(self.trajectory_points) * 0.2:
-                    print(f"✗ 太多無法到達的點 ({self.skipped_points_count}/{len(self.trajectory_points)})")
-                    self.is_following_trajectory = False
-                    self.skipped_points_count = 0
-            else:
-                print(f"✗ 失敗於點 {self.trajectory_index}: {msg}")
-                self.is_following_trajectory = False
-
-    def set_trajectory_speed(self, speed):
-        """設定軌跡速度
-        speed: 1-1000，數字越大速度越快
+    def clear_all_presets(self):
         """
-        self.trajectory_delay = 0.005 * (1000 - speed) / 999
-        print(f"軌跡速度: {speed}x")
+        清空所有預設（謹慎使用！）
+        Returns:
+            bool: 是否成功
+        """
+        self.presets = {}
+        success = self.save_all_presets()
 
-    def stop_trajectory(self):
-        """停止軌跡執行"""
-        self.is_following_trajectory = False
-        self.skipped_points_count = 0
-        print("軌跡已停止")
+        if success:
+            print("✓ 已清空所有預設")
 
-    def reset_pose(self):
-        """重置所有關節到 0 度"""
-        for i in range(6):
-            self.set_target(i, 0)
-        print("姿態已重置")
+        return success
+
+
+# ========== 測試程式 ==========
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("PresetManager 測試")
+    print("=" * 60)
+
+    # 創建管理器
+    manager = PresetManager()
+
+    # 顯示所有預設
+    print(f"\n預設數量: {manager.get_preset_count()}")
+    print("預設列表:")
+    for name in manager.get_all_preset_names():
+        print(f"  - {name}")
+
+    # 新增自訂預設
+    print("\n新增自訂預設...")
+    test_preset = {
+        'joint_angles': [45, -30, 60, 90, -45, 180],
+        'position': {'x': 100, 'y': 200, 'z': 300, 'rx': 0, 'ry': 0, 'rz': 0},
+        'description': '測試姿態'
+    }
+    manager.save_preset('測試姿態', test_preset)
+
+    # 載入預設
+    print("\n載入預設...")
+    loaded = manager.load_preset('測試姿態')
+    if loaded:
+        print(f"關節角度: {loaded['joint_angles']}")
+
+    # 刪除預設
+    print("\n刪除預設...")
+    manager.delete_preset('測試姿態')
+
+    print("\n" + "=" * 60)
+    print("測試完成！")
+    print("=" * 60)
