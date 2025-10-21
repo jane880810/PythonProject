@@ -1,5 +1,5 @@
 """
-core/controller.py 123456789
+core/controller.py
 機械手臂控制器
 """
 
