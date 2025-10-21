@@ -1,7 +1,6 @@
 """
 gui/main_window.py
 主視窗 - 完整控制面板版本
-RA605-710-GC 六軸機械手臂控制系統
 """
 
 from PyQt5.QtWidgets import *
@@ -9,7 +8,6 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 import sys
 import numpy as np
-from datetime import datetime
 
 # 匯入各個模組
 from core.kinematics import Kinematics
@@ -38,9 +36,6 @@ class RobotMainWindow(QMainWindow):
         self.joint_labels = {}
         self.position_inputs = {}
         self.trajectory_points = []
-
-        # 運行時間計時器
-        self.start_time = datetime.now()
 
         self.setWindowTitle("RA605-710-GC 六軸機械手臂控制系統")
         self.setGeometry(50, 50, 1800, 900)
@@ -361,11 +356,7 @@ class RobotMainWindow(QMainWindow):
             value_layout.addStretch()
 
             # 範圍顯示
-            # 支援兩種格式：字典或列表
-            if isinstance(JOINT_LIMITS, dict):
-                min_val, max_val = JOINT_LIMITS[f'J{i}']
-            else:
-                min_val, max_val = JOINT_LIMITS[i-1]  # list 是 0-based
+            min_val, max_val = JOINT_LIMITS[f'J{i}']
             range_label = QLabel(f"範圍: {min_val}° ~ {max_val}°")
             range_label.setStyleSheet("color: #7f8c8d; font-size: 11px;")
             value_layout.addWidget(range_label)
@@ -717,13 +708,11 @@ class RobotMainWindow(QMainWindow):
         self.ctrl.move_to_home()
         for i, angle in enumerate(home_angles, 1):
             self.joint_sliders[i].setValue(angle)
-        self.add_log("機械手臂已回到原點位置")
 
     def zero_all_joints(self):
         """所有關節歸零"""
         for i in range(1, 7):
             self.joint_sliders[i].setValue(0)
-        self.add_log("所有關節已歸零")
 
     def move_to_position(self):
         """移動到目標位置"""
@@ -739,7 +728,7 @@ class RobotMainWindow(QMainWindow):
 
         success = self.ctrl.move_to_position(target, speed)
         if success:
-            self.add_log(f"移動到位置: X={target['x']:.1f}, Y={target['y']:.1f}, Z={target['z']:.1f}")
+            self.add_log(f"移動到位置: {target}")
         else:
             self.add_warning("無法到達目標位置")
 
@@ -757,219 +746,163 @@ class RobotMainWindow(QMainWindow):
 
         success = self.ctrl.linear_move(target, speed)
         if success:
-            self.add_log(f"直線移動到: X={target['x']:.1f}, Y={target['y']:.1f}, Z={target['z']:.1f}")
+            self.add_log(f"直線移動到: {target}")
         else:
-            self.add_warning("直線移動失敗")
-
-    # ========== 軌跡規劃功能 ==========
+            self.add_warning("直線路徑規劃失敗")
 
     def add_trajectory_point(self):
-        """新增當前位置為軌跡點"""
+        """新增軌跡點"""
         current_pos = self.ctrl.get_current_position()
-        point_data = {
-            'x': current_pos['x'],
-            'y': current_pos['y'],
-            'z': current_pos['z'],
-            'rx': current_pos['rx'],
-            'ry': current_pos['ry'],
-            'rz': current_pos['rz']
-        }
-        self.trajectory_points.append(point_data)
+        if current_pos:
+            point_str = f"P{len(self.trajectory_points)+1}: "
+            point_str += f"X={current_pos['x']:.1f}, Y={current_pos['y']:.1f}, Z={current_pos['z']:.1f}"
 
-        # 更新列表顯示
-        point_str = f"點 {len(self.trajectory_points)}: X={point_data['x']:.1f}, Y={point_data['y']:.1f}, Z={point_data['z']:.1f}"
-        self.trajectory_list.addItem(point_str)
-        self.add_log(f"已新增軌跡點 {len(self.trajectory_points)}")
+            self.trajectory_points.append(current_pos)
+            self.trajectory_list.addItem(point_str)
+            self.add_log(f"新增軌跡點 {len(self.trajectory_points)}")
 
     def insert_trajectory_point(self):
-        """在選中位置插入軌跡點"""
+        """插入軌跡點"""
         current_row = self.trajectory_list.currentRow()
-        if current_row < 0:
-            self.add_warning("請先選擇插入位置")
-            return
-
-        current_pos = self.ctrl.get_current_position()
-        point_data = {
-            'x': current_pos['x'],
-            'y': current_pos['y'],
-            'z': current_pos['z'],
-            'rx': current_pos['rx'],
-            'ry': current_pos['ry'],
-            'rz': current_pos['rz']
-        }
-
-        self.trajectory_points.insert(current_row, point_data)
-        self.refresh_trajectory_list()
-        self.add_log(f"已在位置 {current_row + 1} 插入軌跡點")
+        if current_row >= 0:
+            current_pos = self.ctrl.get_current_position()
+            if current_pos:
+                self.trajectory_points.insert(current_row, current_pos)
+                self.refresh_trajectory_list()
+                self.add_log(f"插入軌跡點於位置 {current_row+1}")
 
     def delete_trajectory_point(self):
         """刪除選中的軌跡點"""
         current_row = self.trajectory_list.currentRow()
-        if current_row < 0:
-            self.add_warning("請先選擇要刪除的軌跡點")
-            return
-
-        del self.trajectory_points[current_row]
-        self.refresh_trajectory_list()
-        self.add_log(f"已刪除軌跡點 {current_row + 1}")
+        if current_row >= 0:
+            self.trajectory_points.pop(current_row)
+            self.refresh_trajectory_list()
+            self.add_log(f"刪除軌跡點 {current_row+1}")
 
     def clear_trajectory(self):
         """清空所有軌跡點"""
-        reply = QMessageBox.question(
-            self,
-            '確認清空',
-            '確定要清空所有軌跡點嗎？',
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-
+        reply = QMessageBox.question(self, '確認', '確定要清空所有軌跡點嗎？',
+                                    QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
             self.trajectory_points.clear()
             self.trajectory_list.clear()
-            self.add_log("已清空所有軌跡點")
+            self.add_log("清空所有軌跡點")
 
     def refresh_trajectory_list(self):
         """刷新軌跡點列表顯示"""
         self.trajectory_list.clear()
-        for i, point in enumerate(self.trajectory_points, 1):
-            point_str = f"點 {i}: X={point['x']:.1f}, Y={point['y']:.1f}, Z={point['z']:.1f}"
+        for i, point in enumerate(self.trajectory_points):
+            point_str = f"P{i+1}: "
+            point_str += f"X={point['x']:.1f}, Y={point['y']:.1f}, Z={point['z']:.1f}"
             self.trajectory_list.addItem(point_str)
 
     def run_trajectory(self):
         """執行軌跡"""
-        if len(self.trajectory_points) < 2:
-            self.add_warning("至少需要 2 個軌跡點")
+        if not self.trajectory_points:
+            self.add_warning("沒有軌跡點")
             return
 
-        motion_type = self.motion_type.currentText()
-        speed = self.traj_speed.value() / 100.0
-        accel = self.traj_accel.value() / 100.0
-        blend = self.blend_radius.value()
-        loop = self.loop_checkbox.isChecked()
-        loop_count = self.loop_count.value() if loop else 1
+        params = {
+            'motion_type': self.motion_type.currentText(),
+            'speed': self.traj_speed.value() / 100.0,
+            'acceleration': self.traj_accel.value() / 100.0,
+            'blend_radius': self.blend_radius.value(),
+            'loop': self.loop_checkbox.isChecked(),
+            'loop_count': self.loop_count.value()
+        }
 
-        self.add_log(f"開始執行軌跡 ({motion_type}), 速度: {speed*100:.0f}%, 點數: {len(self.trajectory_points)}")
-
-        # 執行軌跡
-        success = self.ctrl.execute_trajectory(
-            self.trajectory_points,
-            motion_type,
-            speed,
-            accel,
-            blend,
-            loop_count
-        )
-
+        success = self.ctrl.execute_trajectory(self.trajectory_points, params)
         if success:
-            self.add_log("軌跡執行完成")
+            self.add_log("開始執行軌跡")
+            self.status_indicator.setText("● 執行中")
+            self.status_indicator.setStyleSheet(f"color: {GUI_THEME['warning']}; font-size: 14px;")
         else:
             self.add_warning("軌跡執行失敗")
 
     def pause_trajectory(self):
         """暫停軌跡執行"""
-        self.ctrl.pause_trajectory()
-        self.add_log("軌跡已暫停")
+        self.ctrl.pause_motion()
+        self.add_log("軌跡暫停")
+        self.status_indicator.setText("● 暫停")
+        self.status_indicator.setStyleSheet(f"color: {GUI_THEME['warning']}; font-size: 14px;")
 
     def stop_trajectory(self):
         """停止軌跡執行"""
-        self.ctrl.stop_trajectory()
-        self.add_log("軌跡已停止")
-
-    # ========== 姿態管理 ==========
+        self.ctrl.stop_motion()
+        self.add_log("軌跡停止")
+        self.status_indicator.setText("● 已停止")
+        self.status_indicator.setStyleSheet(f"color: {GUI_THEME['danger']}; font-size: 14px;")
 
     def load_preset(self, item):
         """載入預設姿態"""
         preset_name = item.text()
         preset_data = self.preset_manager.load_preset(preset_name)
 
-        if preset_data:
-            for i, angle in enumerate(preset_data['angles'], 1):
-                self.joint_sliders[i].setValue(angle)
-            self.add_log(f"已載入姿態: {preset_name}")
-        else:
-            self.add_warning(f"載入姿態失敗: {preset_name}")
+        if preset_data and 'joint_angles' in preset_data:
+            angles = preset_data['joint_angles']
+            for i, angle in enumerate(angles, 1):
+                if i <= 6:
+                    self.joint_sliders[i].setValue(int(angle))
+            self.add_log(f"載入預設姿態: {preset_name}")
 
     def save_current_preset(self):
-        """儲存當前姿態"""
-        name, ok = QInputDialog.getText(self, '儲存姿態', '請輸入姿態名稱:')
-
+        """儲存當前姿態為預設"""
+        name, ok = QInputDialog.getText(self, '儲存預設姿態', '請輸入預設名稱:')
         if ok and name:
             angles = [self.joint_sliders[i].value() for i in range(1, 7)]
+            position = self.ctrl.get_current_position()
+
             preset_data = {
-                'angles': angles,
-                'timestamp': datetime.now().isoformat()
+                'joint_angles': angles,
+                'position': position,
+                'timestamp': QDateTime.currentDateTime().toString()
             }
 
-            success = self.preset_manager.save_preset(name, preset_data)
-
-            if success:
-                self.preset_list.addItem(name)
-                self.add_log(f"已儲存姿態: {name}")
-            else:
-                self.add_warning("儲存姿態失敗")
+            self.preset_manager.save_preset(name, preset_data)
+            self.preset_list.addItem(name)
+            self.add_log(f"儲存預設姿態: {name}")
 
     def delete_preset(self):
-        """刪除選中的姿態"""
+        """刪除選中的預設姿態"""
         current_item = self.preset_list.currentItem()
-        if not current_item:
-            self.add_warning("請先選擇要刪除的姿態")
-            return
+        if current_item:
+            preset_name = current_item.text()
+            reply = QMessageBox.question(self, '確認刪除',
+                                        f'確定要刪除預設姿態 "{preset_name}" 嗎？',
+                                        QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                self.preset_manager.delete_preset(preset_name)
+                self.preset_list.takeItem(self.preset_list.currentRow())
+                self.add_log(f"刪除預設姿態: {preset_name}")
 
-        preset_name = current_item.text()
-        reply = QMessageBox.question(
-            self,
-            '確認刪除',
-            f'確定要刪除姿態 "{preset_name}" 嗎？',
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
+    def emergency_stop(self):
+        """緊急停止"""
+        self.ctrl.emergency_stop()
+        self.add_warning("緊急停止已觸發！")
+        self.status_indicator.setText("● 緊急停止")
+        self.status_indicator.setStyleSheet(f"color: {GUI_THEME['danger']}; font-size: 14px;")
 
-        if reply == QMessageBox.Yes:
-            success = self.preset_manager.delete_preset(preset_name)
-            if success:
-                self.preset_list.takeItem(self.preset_list.row(current_item))
-                self.add_log(f"已刪除姿態: {preset_name}")
-            else:
-                self.add_warning("刪除姿態失敗")
-
-    # ========== 監控與日誌 ==========
+        # 顯示緊急停止對話框
+        QMessageBox.critical(self, "緊急停止",
+                           "機器人已緊急停止！\n請檢查系統後重新啟動。")
 
     def update_display(self):
-        """更新顯示資訊"""
-        try:
-            # 更新運行時間
-            elapsed = datetime.now() - self.start_time
-            hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
-            minutes, seconds = divmod(remainder, 60)
-            self.monitor_labels['運行時間'].setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+        """定時更新顯示"""
+        # 更新當前位置
+        self.update_position_display()
 
-            # 更新當前位置
-            self.update_position_display()
+        # 更新監控資訊
+        self.update_monitor_info()
 
-            # 更新系統狀態
-            if self.ctrl.is_connected():
-                self.status_indicator.setText("● 運行中")
-                self.status_indicator.setStyleSheet(f"color: {GUI_THEME['success']}; font-size: 14px;")
-                self.monitor_labels['連線狀態'].setText("已連線")
-            else:
-                self.status_indicator.setText("● 已斷線")
-                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 14px;")
-                self.monitor_labels['連線狀態'].setText("未連線")
-
-            # 更新速度和加速度
-            velocity = self.ctrl.get_current_velocity()
-            acceleration = self.ctrl.get_current_acceleration()
-            self.monitor_labels['目前速度'].setText(f"{velocity:.1f} mm/s")
-            self.monitor_labels['目前加速度'].setText(f"{acceleration:.1f} mm/s²")
-
-        except Exception as e:
-            print(f"更新顯示錯誤: {e}")
+        # 更新 3D 視覺化
+        if self.vtk_widget:
+            angles = [self.joint_sliders[i].value() for i in range(1, 7)]
+            self.vtk_widget.update_robot_pose(angles)
 
     def update_position_display(self):
         """更新位置顯示"""
-        try:
-            current_pos = self.ctrl.get_current_position()
-
+        current_pos = self.ctrl.get_current_position()
+        if current_pos:
             self.current_pos_labels['X'].setText(f"{current_pos['x']:.1f} mm")
             self.current_pos_labels['Y'].setText(f"{current_pos['y']:.1f} mm")
             self.current_pos_labels['Z'].setText(f"{current_pos['z']:.1f} mm")
@@ -977,34 +910,62 @@ class RobotMainWindow(QMainWindow):
             self.current_pos_labels['Ry'].setText(f"{current_pos['ry']:.1f}°")
             self.current_pos_labels['Rz'].setText(f"{current_pos['rz']:.1f}°")
 
-        except Exception as e:
-            print(f"更新位置顯示錯誤: {e}")
+    def update_monitor_info(self):
+        """更新監控資訊"""
+        status = self.ctrl.get_system_status()
+        if status:
+            self.monitor_labels["連線狀態"].setText(
+                "已連線" if status.get('connected', False) else "未連線"
+            )
+
+            # 更新運行時間
+            uptime = status.get('uptime', 0)
+            hours = int(uptime // 3600)
+            minutes = int((uptime % 3600) // 60)
+            seconds = int(uptime % 60)
+            self.monitor_labels["運行時間"].setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+
+            # 更新其他監控資訊
+            self.monitor_labels["CPU 使用率"].setText(f"{status.get('cpu_usage', 0):.1f}%")
+            self.monitor_labels["記憶體使用"].setText(f"{status.get('memory_usage', 0):.0f} MB")
+            self.monitor_labels["目前速度"].setText(f"{status.get('current_speed', 0):.1f} mm/s")
+            self.monitor_labels["目前加速度"].setText(f"{status.get('current_accel', 0):.1f} mm/s²")
 
     def add_log(self, message):
-        """新增日誌訊息"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        log_entry = f"[{timestamp}] {message}"
-        self.log_text.append(log_entry)
-        print(log_entry)
+        """添加日誌訊息"""
+        timestamp = QDateTime.currentDateTime().toString("HH:mm:ss")
+        self.log_text.append(f"[{timestamp}] {message}")
+
+        # 自動捲動到底部
+        scrollbar = self.log_text.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
     def add_warning(self, message):
-        """新增警告訊息"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        warning_entry = f"[{timestamp}] ⚠ {message}"
-        self.warning_list.addItem(warning_entry)
-        self.add_log(f"警告: {message}")
+        """添加警告訊息"""
+        timestamp = QDateTime.currentDateTime().toString("HH:mm:ss")
+        warning_msg = f"[{timestamp}] ⚠ {message}"
+        self.warning_list.addItem(warning_msg)
+
+        # 同時加入日誌
+        self.add_log(f"⚠ 警告: {message}")
+
+        # 限制警告列表長度
+        while self.warning_list.count() > 10:
+            self.warning_list.takeItem(0)
 
     def clear_log(self):
         """清空日誌"""
-        self.log_text.clear()
-        self.add_log("日誌已清空")
+        reply = QMessageBox.question(self, '確認', '確定要清空日誌嗎？',
+                                    QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.log_text.clear()
+            self.add_log("日誌已清空")
 
     def export_log(self):
         """匯出日誌"""
         filename, _ = QFileDialog.getSaveFileName(
-            self,
-            "匯出日誌",
-            f"robot_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            self, "匯出日誌",
+            f"robot_log_{QDateTime.currentDateTime().toString('yyyyMMdd_HHmmss')}.txt",
             "Text Files (*.txt)"
         )
 
@@ -1012,108 +973,88 @@ class RobotMainWindow(QMainWindow):
             try:
                 with open(filename, 'w', encoding='utf-8') as f:
                     f.write(self.log_text.toPlainText())
-                self.add_log(f"日誌已匯出至: {filename}")
+                self.add_log(f"日誌已匯出到: {filename}")
+                QMessageBox.information(self, "成功", "日誌匯出成功！")
             except Exception as e:
-                self.add_warning(f"匯出日誌失敗: {e}")
-
-    # ========== 緊急功能 ==========
-
-    def emergency_stop(self):
-        """緊急停止"""
-        reply = QMessageBox.warning(
-            self,
-            '緊急停止',
-            '確定要執行緊急停止嗎？\n這將立即停止所有運動！',
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-
-        if reply == QMessageBox.Yes:
-            self.ctrl.emergency_stop()
-            self.add_log("========== 緊急停止已執行 ==========")
-            self.add_warning("機械手臂已緊急停止")
-
-            # 更新狀態顯示
-            self.status_indicator.setText("● 已停止")
-            self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 14px;")
+                QMessageBox.critical(self, "錯誤", f"匯出失敗: {str(e)}")
 
     def closeEvent(self, event):
-        """視窗關閉事件"""
+        """關閉視窗事件"""
         reply = QMessageBox.question(
-            self,
-            '確認關閉',
-            '確定要關閉控制系統嗎？',
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            self, '確認退出',
+            '確定要關閉機器人控制系統嗎？',
+            QMessageBox.Yes | QMessageBox.No
         )
 
         if reply == QMessageBox.Yes:
-            self.add_log("系統正在關閉...")
-            self.ctrl.disconnect()
+            # 停止所有運動
+            self.ctrl.stop_motion()
+
+            # 停止定時器
+            self.update_timer.stop()
+
+            # 關閉 VTK widget
+            if self.vtk_widget:
+                self.vtk_widget.close()
+
             event.accept()
         else:
             event.ignore()
 
 
-# ========== 主程式入口 ==========
-def main():
-    """主程式入口"""
+# ========== 測試主程式 ==========
+
+if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    # 設定應用程式樣式
-    app.setStyle('Fusion')
+    # 設定應用程式圖標
+    app.setWindowIcon(QIcon("assets/robot_icon.png"))
 
-    # 這裡需要導入實際的控制器
-    # from core.robot_controller import RobotController
-    # controller = RobotController()
-
-    # 暫時使用模擬控制器
+    # 創建模擬控制器（測試用）
     class MockController:
         def __init__(self):
-            self.connected = True
-            self.current_angles = [0, 0, 0, 0, 0, 0]
+            self.joint_angles = [0] * 6
             self.current_position = {'x': 0, 'y': 0, 'z': 0, 'rx': 0, 'ry': 0, 'rz': 0}
 
         def set_joint_angles(self, angles):
-            self.current_angles = angles
-
-        def move_to_home(self):
-            self.current_angles = [0, 0, 0, 0, 0, 0]
-
-        def move_to_position(self, target, speed):
-            self.current_position = target
-            return True
-
-        def linear_move(self, target, speed):
-            self.current_position = target
+            self.joint_angles = angles
             return True
 
         def get_current_position(self):
             return self.current_position
 
-        def is_connected(self):
-            return self.connected
-
-        def get_current_velocity(self):
-            return 0.0
-
-        def get_current_acceleration(self):
-            return 0.0
-
-        def execute_trajectory(self, points, motion_type, speed, accel, blend, loop_count):
+        def move_to_position(self, target, speed):
+            self.current_position.update(target)
             return True
 
-        def pause_trajectory(self):
-            pass
+        def linear_move(self, target, speed):
+            return True
 
-        def stop_trajectory(self):
-            pass
+        def move_to_home(self):
+            self.joint_angles = [0] * 6
+            return True
+
+        def execute_trajectory(self, points, params):
+            return True
+
+        def pause_motion(self):
+            return True
+
+        def stop_motion(self):
+            return True
 
         def emergency_stop(self):
-            self.connected = False
+            return True
 
-        def disconnect(self):
-            self.connected = False
+        def get_system_status(self):
+            return {
+                'connected': True,
+                'uptime': 3661,
+                'cpu_usage': 35.2,
+                'memory_usage': 512,
+                'current_speed': 150.5,
+                'current_accel': 100.0
+            }
 
     controller = MockController()
 
@@ -1122,7 +1063,3 @@ def main():
     window.show()
 
     sys.exit(app.exec_())
-
-
-if __name__ == '__main__':
-    main()
