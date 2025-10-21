@@ -6,8 +6,8 @@ core/controller.py
 import numpy as np
 import time
 
-# 從配置檔案匯入參數
-from config.robot_config import ROBOT_DH_PARAMS
+# 從配置檔案匯入參數 - 修正變數名稱
+from config.robot_config import DH_PARAMS  # 改正：不是 ROBOT_DH_PARAMS
 
 
 class AnimationController:
@@ -15,12 +15,12 @@ class AnimationController:
 
     def __init__(self):
         # 從配置讀取 DH 參數
-        self.S1 = ROBOT_DH_PARAMS['S1']
-        self.S2 = ROBOT_DH_PARAMS['S2']
-        self.L1 = ROBOT_DH_PARAMS['L1']
-        self.L2 = ROBOT_DH_PARAMS['L2']
-        self.L3 = ROBOT_DH_PARAMS['L3']
-        self.L4 = ROBOT_DH_PARAMS['L4']
+        self.S1 = DH_PARAMS['S1']  # 改正：使用 DH_PARAMS
+        self.S2 = DH_PARAMS['S2']
+        self.L1 = DH_PARAMS['L1']
+        self.L2 = DH_PARAMS['L2']
+        self.L3 = DH_PARAMS['L3']
+        self.L4 = DH_PARAMS['L4']
 
         self.current_angles = [0, 0, 0, 0, 0, 0]
         self.target_angles = [0, 0, 0, 0, 0, 0]
@@ -56,7 +56,98 @@ class AnimationController:
         self.skip_unreachable_points = True
         self.skipped_points_count = 0
 
+        # 新增：支援 main_window 的方法
+        self.current_position = {'x': 0, 'y': 0, 'z': 0, 'rx': 0, 'ry': 0, 'rz': 0}
+        self.system_status = {
+            'connected': True,
+            'uptime': 0,
+            'cpu_usage': 0,
+            'memory_usage': 0,
+            'current_speed': 0,
+            'current_accel': 0
+        }
+        self.start_time = time.time()
+
         print("✓ AnimationController 初始化完成")
+
+    # ===== 新增的方法支援 main_window =====
+
+    def set_joint_angles(self, angles):
+        """設定關節角度"""
+        for i, angle in enumerate(angles):
+            if i < 6:
+                self.set_target(i, angle)
+        return True
+
+    def get_current_position(self):
+        """取得當前位置"""
+        # 使用 FK 計算當前位置
+        from core.kinematics import Kinematics
+        kin = Kinematics()
+        pos = kin.forward_kinematics(self.current_angles)
+        self.current_position = pos
+        return self.current_position
+
+    def move_to_position(self, target, speed):
+        """移動到目標位置"""
+        x = target.get('x', 0) / 1000.0  # mm to m
+        y = target.get('y', 0) / 1000.0
+        z = target.get('z', 0) / 1000.0
+
+        success, msg = self.move_to(x, y, z)
+        return success
+
+    def linear_move(self, target, speed):
+        """直線移動"""
+        # 簡化實作
+        return self.move_to_position(target, speed)
+
+    def move_to_home(self):
+        """回到原點"""
+        self.reset_pose()
+        return True
+
+    def execute_trajectory(self, points, params):
+        """執行軌跡"""
+        # 轉換點格式
+        traj_points = []
+        for p in points:
+            traj_points.append([
+                p['x'] / 1000.0,
+                p['y'] / 1000.0,
+                p['z'] / 1000.0
+            ])
+        self.start_trajectory(traj_points)
+        return True
+
+    def pause_motion(self):
+        """暫停運動"""
+        self.is_animating = False
+        self.is_following_trajectory = False
+        return True
+
+    def stop_motion(self):
+        """停止運動"""
+        self.stop_trajectory()
+        self.is_animating = False
+        return True
+
+    def emergency_stop(self):
+        """緊急停止"""
+        self.stop_motion()
+        print("⚠ 緊急停止！")
+        return True
+
+    def get_system_status(self):
+        """取得系統狀態"""
+        self.system_status['uptime'] = time.time() - self.start_time
+        self.system_status['cpu_usage'] = np.random.uniform(20, 40)  # 模擬值
+        self.system_status['memory_usage'] = np.random.uniform(400, 600)
+        self.system_status['current_speed'] = np.random.uniform(100, 200)
+        self.system_status['current_accel'] = np.random.uniform(80, 120)
+        return self.system_status
+
+    # ===== 原有的方法 =====
 
     def set_marker(self, marker):
         """設定關節 5 標記（用於 3D 視覺化）"""

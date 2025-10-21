@@ -1,11 +1,9 @@
-# ========== utils/__init__.py ==========
+# ============= 4. utils/__init__.py =============
 """
 utils/__init__.py
-工具模組初始化
+工具模組初始化檔案
 """
 
 from .preset_manager import PresetManager
 
-__all__ = [
-    'PresetManager'
-]
+__all__ = ['PresetManager']

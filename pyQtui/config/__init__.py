@@ -1,23 +1,23 @@
-# ========== config/__init__.py ==========
+# ============= 5. config/__init__.py =============
 """
 config/__init__.py
-配置模組初始化
+配置模組初始化檔案
 """
 
+# 從 robot_config 匯入所有需要的配置
 from .robot_config import (
-    ROBOT_DH_PARAMS,
-    JOINT_LIMITS,
-    MODEL_PATHS,
-    DEFAULT_POSES,
-    TRAJECTORY_CONFIG,
-    GUI_THEME
+    DH_PARAMS,           # DH 參數
+    JOINT_LIMITS,        # 關節限制
+    WORKSPACE,           # 工作空間
+    GUI_THEME,           # GUI 主題
+    TRAJECTORY_CONFIG    # 軌跡配置
 )
 
+# 匯出所有配置
 __all__ = [
-    'ROBOT_DH_PARAMS',
+    'DH_PARAMS',
     'JOINT_LIMITS',
-    'MODEL_PATHS',
-    'DEFAULT_POSES',
-    'TRAJECTORY_CONFIG',
-    'GUI_THEME'
+    'WORKSPACE',
+    'GUI_THEME',
+    'TRAJECTORY_CONFIG'
 ]
