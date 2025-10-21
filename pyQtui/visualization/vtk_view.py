@@ -7,7 +7,7 @@ import vtk
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from PyQt5.QtWidgets import QWidget, QVBoxLayout
 import numpy as np
-from config.robot_config import MODEL_PATHS, ROBOT_DH_PARAMS
+from config.robot_config import MODEL_CONFIG, DH_PARAMS  # 修正：使用 DH_PARAMS
 
 
 class VTKWidget(QWidget):
@@ -27,13 +27,13 @@ class VTKWidget(QWidget):
         self.actors = {}
         self.meshes = []
 
-        # 從配置讀取參數
-        self.S1 = ROBOT_DH_PARAMS['S1']
-        self.S2 = ROBOT_DH_PARAMS['S2']
-        self.L1 = ROBOT_DH_PARAMS['L1']
-        self.L2 = ROBOT_DH_PARAMS['L2']
-        self.L3 = ROBOT_DH_PARAMS['L3']
-        self.L4 = ROBOT_DH_PARAMS['L4']
+        # 從配置讀取參數 - 修正變數名稱
+        self.S1 = DH_PARAMS['S1']
+        self.S2 = DH_PARAMS['S2']
+        self.L1 = DH_PARAMS['L1']
+        self.L2 = DH_PARAMS['L2']
+        self.L3 = DH_PARAMS['L3']
+        self.L4 = DH_PARAMS['L4']
 
         # 末端標記
         self.joint5_marker = None
@@ -113,14 +113,25 @@ class VTKWidget(QWidget):
 
     def load_robot_models(self):
         """載入機械手臂 3D 模型"""
-        base_path = MODEL_PATHS['base_path']
-        model_files = MODEL_PATHS['models']
+        base_path = MODEL_CONFIG.get('obj_path', '/home/yahboom/Desktop/Obj/')
+        model_count = MODEL_CONFIG.get('model_count', 8)
+        model_prefix = MODEL_CONFIG.get('model_prefix', 'p')
+        model_extension = MODEL_CONFIG.get('model_extension', '.obj')
 
         print(f"正在從 {base_path} 載入模型...")
 
-        for i, model_file in enumerate(model_files):
+        loaded_count = 0
+        for i in range(1, model_count + 1):
+            model_file = f"{model_prefix}{i}{model_extension}"
             full_path = base_path + model_file
+
             try:
+                # 檢查檔案是否存在
+                import os
+                if not os.path.exists(full_path):
+                    print(f"  ⚠ 檔案不存在: {full_path}")
+                    continue
+
                 # 讀取 OBJ 檔案
                 reader = vtk.vtkOBJReader()
                 reader.SetFileName(full_path)
@@ -135,7 +146,7 @@ class VTKWidget(QWidget):
                 actor.SetMapper(mapper)
 
                 # 設定顏色（根據部件設定不同顏色）
-                if i == 0:
+                if i == 1:
                     actor.GetProperty().SetColor(0.5, 0.5, 0.5)  # 基座：灰色
                 else:
                     actor.GetProperty().SetColor(0.7, 0.7, 0.7)  # 其他：淺灰
@@ -151,13 +162,17 @@ class VTKWidget(QWidget):
 
                 # 儲存引用
                 self.actors[f"part_{i}"] = actor
+                loaded_count += 1
 
             except Exception as e:
-                print(f"⚠ 無法載入 {model_file}: {e}")
-                return False
+                print(f"  ⚠ 無法載入 {model_file}: {e}")
 
-        print(f"✓ 已載入 {len(self.actors)} 個模型")
-        return True
+        if loaded_count > 0:
+            print(f"✓ 已載入 {loaded_count} 個模型")
+            return True
+        else:
+            print("⚠ 無法載入任何模型，使用簡化視覺化")
+            return False
 
     def create_simple_robot(self):
         """創建簡化的機械手臂視覺化"""
@@ -179,7 +194,7 @@ class VTKWidget(QWidget):
         self.renderer.AddActor(actor)
         self.actors["base"] = actor
 
-        # 連桿 1
+        # 連桿 1（垂直）
         link1 = vtk.vtkCylinderSource()
         link1.SetRadius(0.05)
         link1.SetHeight(self.L1)
@@ -195,6 +210,26 @@ class VTKWidget(QWidget):
 
         self.renderer.AddActor(actor1)
         self.actors["link1"] = actor1
+
+        # 連桿 2
+        link2 = vtk.vtkCylinderSource()
+        link2.SetRadius(0.04)
+        link2.SetHeight(self.L2)
+        link2.SetResolution(16)
+
+        mapper2 = vtk.vtkPolyDataMapper()
+        mapper2.SetInputConnection(link2.GetOutputPort())
+
+        actor2 = vtk.vtkActor()
+        actor2.SetMapper(mapper2)
+        actor2.GetProperty().SetColor(0.2, 0.7, 0.9)
+        # 初始位置在 link1 頂端
+        actor2.SetPosition(0, 0, self.L1 + self.L2 / 2)
+
+        self.renderer.AddActor(actor2)
+        self.actors["link2"] = actor2
+
+        print("✓ 簡化視覺化已創建")
 
     def create_joint5_marker(self):
         """創建關節 5 末端標記"""
@@ -212,17 +247,38 @@ class VTKWidget(QWidget):
         self.joint5_marker.GetProperty().SetColor(1.0, 0.0, 0.0)  # 紅色
 
         # 設定初始位置
-        pos = self.ctrl.get_joint5_position()
-        self.joint5_marker.SetPosition(pos[0], pos[1], pos[2])
+        try:
+            pos = self.ctrl.get_joint5_position()
+            self.joint5_marker.SetPosition(pos[0], pos[1], pos[2])
+        except:
+            # 如果獲取失敗，設定預設位置
+            self.joint5_marker.SetPosition(0, 0, self.L1 + self.L2)
 
         self.renderer.AddActor(self.joint5_marker)
 
     def update_joint5_marker(self):
         """更新關節 5 標記位置"""
         if self.joint5_marker:
-            pos = self.ctrl.get_joint5_position()
-            self.joint5_marker.SetPosition(pos[0], pos[1], pos[2])
-            self.renderWindow.Render()
+            try:
+                pos = self.ctrl.get_joint5_position()
+                self.joint5_marker.SetPosition(pos[0], pos[1], pos[2])
+                self.renderWindow.Render()
+            except:
+                pass
+
+    def update_robot_pose(self, joint_angles):
+        """
+        更新機器人姿態
+        Args:
+            joint_angles: 6個關節角度列表 [J1, J2, J3, J4, J5, J6]
+        """
+        # 更新末端標記
+        self.update_joint5_marker()
+
+        # 如果有載入完整模型，這裡可以更新各部件的旋轉
+        # 目前簡化版本只更新末端標記
+
+        self.renderWindow.Render()
 
     def add_environment(self):
         """添加環境物件"""
