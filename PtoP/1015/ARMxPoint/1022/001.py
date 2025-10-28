@@ -87,7 +87,9 @@ print(f"L2={L2*1000:.1f} L3={L3*1000:.1f} L4={L4*1000:.1f}")
 print("=" * 60 + "\n")
 
 # ---------- 載入模型 ----------
-paths = [rf"/home/yahboom/Desktop/Obj/p{i}.obj" for i in range(1, 9)]
+#paths = [rf"/home/yahboom/Desktop/Obj/p{i}.obj" for i in range(1, 9)]
+paths = [rf"/home/test/桌面/Obj/p{i}.obj" for i in range(1, 9)]
+
 meshes = [o3d.io.read_triangle_mesh(p) for p in paths]
 if not all(m.has_triangles() for m in meshes):
     print("模型載入失敗")
