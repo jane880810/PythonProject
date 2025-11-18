@@ -1,5 +1,4 @@
 '''
-20251119
 Open3D 視窗(顯示 3D 機械手臂)
 Tkinter 控制介面(增強版 GUI)
 新增功能:
@@ -101,8 +100,9 @@ meshes = [o3d.io.read_triangle_mesh(p) for p in paths]
 if not all(m.has_triangles() for m in meshes):
     print("模型載入失敗")
     exit()
-for m in meshes:
-    m.compute_vertex_normals()
+# 移除光影計算以節省資源
+# for m in meshes:
+#     m.compute_vertex_normals()
 
 meshes[1].translate((0, 0, 0.23))
 meshes[2].translate((-0.03, 0, 0.375))
@@ -272,7 +272,8 @@ class AnimationController:
         vis.remove_geometry(self.joint5_marker, reset_bounding_box=False)
         self.joint5_marker = o3d.geometry.TriangleMesh.create_sphere(radius=0.08)
         self.joint5_marker.paint_uniform_color([1.0, 0.0, 0.0])
-        self.joint5_marker.compute_vertex_normals()
+        # 移除光影計算以節省資源
+        # self.joint5_marker.compute_vertex_normals()
         self.joint5_marker.translate(pos)
         vis.add_geometry(self.joint5_marker, reset_bounding_box=False)
 
@@ -396,7 +397,7 @@ class AnimationController:
         R4 = o3d.geometry.get_rotation_matrix_from_axis_angle([0, np.deg2rad(angles[2]), 0]) @ R4b
         R5 = o3d.geometry.get_rotation_matrix_from_axis_angle([0, 0, np.deg2rad(angles[3])])
         return R2 @ (self.p3_base_local + R3 @ (
-                self.p3_length_vec + R4 @ (self.p4_length_vec + R5 @ self.p5_length_vec)))
+                    self.p3_length_vec + R4 @ (self.p4_length_vec + R5 @ self.p5_length_vec)))
 
     def ik(self, x, y, z):
         try:
@@ -992,7 +993,8 @@ def main_loop():
     pos = ctrl.get_joint5_position()
     marker = o3d.geometry.TriangleMesh.create_sphere(radius=0.08)
     marker.paint_uniform_color([1, 0, 0])
-    marker.compute_vertex_normals()
+    # 移除光影計算以節省資源
+    # marker.compute_vertex_normals()
     marker.translate(pos)
     vis.add_geometry(marker)
     ctrl.set_marker(marker)
@@ -1005,7 +1007,7 @@ def main_loop():
     try:
         while not exit_flag:
             now = time.time()
-            if now - last > 1 / 60:  # Open3D 保持 60 FPS
+            if now - last > 1 / 20:  # Open3D 更新頻率改為 20 FPS (節省資源)
                 ctrl.animate()
                 last = now
             vis.poll_events()

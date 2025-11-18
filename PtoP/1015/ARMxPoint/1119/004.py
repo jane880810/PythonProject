@@ -1,5 +1,4 @@
 '''
-20251119
 Open3D 視窗(顯示 3D 機械手臂)
 Tkinter 控制介面(增強版 GUI)
 新增功能:
@@ -101,6 +100,7 @@ meshes = [o3d.io.read_triangle_mesh(p) for p in paths]
 if not all(m.has_triangles() for m in meshes):
     print("模型載入失敗")
     exit()
+# 恢復光影計算以提升視覺效果
 for m in meshes:
     m.compute_vertex_normals()
 
@@ -222,6 +222,7 @@ class AnimationController:
         self.trajectory_index = 0
         self.trajectory_delay = 0.005
         self.trajectory_step = 1
+        self.trajectory_render_interval = 10  # 新增: 每N個點才渲染一次
         self.last_trajectory_time = 0
         self.skip_unreachable_points = True
         self.skipped_points_count = 0
@@ -272,11 +273,16 @@ class AnimationController:
         vis.remove_geometry(self.joint5_marker, reset_bounding_box=False)
         self.joint5_marker = o3d.geometry.TriangleMesh.create_sphere(radius=0.08)
         self.joint5_marker.paint_uniform_color([1.0, 0.0, 0.0])
-        self.joint5_marker.compute_vertex_normals()
+        self.joint5_marker.compute_vertex_normals()  # 恢復光影效果
         self.joint5_marker.translate(pos)
         vis.add_geometry(self.joint5_marker, reset_bounding_box=False)
 
-    def update_joint(self, joint_idx, delta_angle):
+    def update_joint(self, joint_idx, delta_angle, batch_mode=False):
+        """
+        更新關節位置
+        batch_mode=True: 只更新數據,不立即更新視覺(用於批量更新)
+        batch_mode=False: 正常更新(含視覺更新)
+        """
         if abs(delta_angle) < 0.0001:
             return
         delta_rad = np.deg2rad(delta_angle)
@@ -287,8 +293,9 @@ class AnimationController:
             T = np.eye(4)
             T[:3, :3] = R
             node2.transform(T, [0, 0, 0])
-            for m in node2.get_all_meshes():
-                vis.update_geometry(m)
+            if not batch_mode:
+                for m in node2.get_all_meshes():
+                    vis.update_geometry(m)
 
         elif joint_idx == 1:
             R_local = o3d.geometry.get_rotation_matrix_from_axis_angle([0, delta_rad, 0])
@@ -299,8 +306,9 @@ class AnimationController:
             T = np.eye(4)
             T[:3, :3] = R_world
             node3.transform(T, center)
-            for m in node3.get_all_meshes():
-                vis.update_geometry(m)
+            if not batch_mode:
+                for m in node3.get_all_meshes():
+                    vis.update_geometry(m)
 
         elif joint_idx == 2:
             R_local = o3d.geometry.get_rotation_matrix_from_axis_angle([0, delta_rad, 0])
@@ -311,8 +319,9 @@ class AnimationController:
             T = np.eye(4)
             T[:3, :3] = R_world
             node4_group.transform(T, center)
-            for m in node4_group.get_all_meshes():
-                vis.update_geometry(m)
+            if not batch_mode:
+                for m in node4_group.get_all_meshes():
+                    vis.update_geometry(m)
 
         elif joint_idx == 3:
             R_local = o3d.geometry.get_rotation_matrix_from_axis_angle([0, 0, delta_rad])
@@ -324,8 +333,9 @@ class AnimationController:
             T = np.eye(4)
             T[:3, :3] = R_world
             node5_group.transform(T, center)
-            for m in node5_group.get_all_meshes():
-                vis.update_geometry(m)
+            if not batch_mode:
+                for m in node5_group.get_all_meshes():
+                    vis.update_geometry(m)
 
         elif joint_idx == 4:
             R_local = o3d.geometry.get_rotation_matrix_from_axis_angle([0, delta_rad, 0])
@@ -338,8 +348,9 @@ class AnimationController:
             T = np.eye(4)
             T[:3, :3] = R_world
             node6_group.transform(T, center)
-            for m in node6_group.get_all_meshes():
-                vis.update_geometry(m)
+            if not batch_mode:
+                for m in node6_group.get_all_meshes():
+                    vis.update_geometry(m)
 
         elif joint_idx == 5:
             R_local = o3d.geometry.get_rotation_matrix_from_axis_angle([delta_rad, 0, 0])
@@ -358,9 +369,19 @@ class AnimationController:
             T = np.eye(4)
             T[:3, :3] = R_world
             node8_group.transform(T, center)
-            for m in node8_group.get_all_meshes():
-                vis.update_geometry(m)
+            if not batch_mode:
+                for m in node8_group.get_all_meshes():
+                    vis.update_geometry(m)
 
+        if not batch_mode:
+            self.update_joint5_marker()
+            self.update_scales()
+
+    def batch_update_all_geometry(self):
+        """批量更新所有幾何體 - 用於軌跡執行時提升效能"""
+        for root in root_nodes:
+            for m in root.get_all_meshes():
+                vis.update_geometry(m)
         self.update_joint5_marker()
         self.update_scales()
 
@@ -436,19 +457,28 @@ class AnimationController:
             self.set_target(i, angles[i])
         return True, "ok"
 
-    def move_to_instant(self, x, y, z):
-        """直接移動到目標位置,不使用動畫"""
+    def move_to_instant(self, x, y, z, render=True):
+        """
+        直接移動到目標位置,不使用動畫
+        render=True: 更新視覺
+        render=False: 只更新數據,不更新視覺(用於加速軌跡執行)
+        """
         res = self.ik(x, y, z)
         if res[0] is None:
             return False, res[1]
         angles = res[0]
 
+        # 使用批量模式更新所有關節
         for i in range(4):
             delta = angles[i] - self.current_angles[i]
             self.current_angles[i] = angles[i]
             self.target_angles[i] = angles[i]
             if abs(delta) > 0.0001:
-                self.update_joint(i, delta)
+                self.update_joint(i, delta, batch_mode=True)  # 批量模式
+
+        # 根據 render 參數決定是否更新視覺
+        if render:
+            self.batch_update_all_geometry()
 
         return True, "ok"
 
@@ -486,22 +516,28 @@ class AnimationController:
             return
 
         if self.trajectory_index >= len(self.trajectory_points):
-            # 軌跡完成 - 不輸出到終端機
+            # 軌跡完成,確保最終位置有渲染
+            self.batch_update_all_geometry()
             self.is_following_trajectory = False
             self.skipped_points_count = 0
             self.clear_trajectory_markers()
             return
 
         pt = self.trajectory_points[self.trajectory_index]
-        ok, msg = self.move_to_instant(pt[0], pt[1], pt[2])
+
+        # 跳幀渲染: 只在特定條件下才渲染視覺
+        should_render = (
+                self.trajectory_index % self.trajectory_render_interval == 0 or  # 每N個點
+                self.trajectory_index == len(self.trajectory_points) - 1  # 最後一個點
+        )
+
+        ok, msg = self.move_to_instant(pt[0], pt[1], pt[2], render=should_render)
 
         if ok:
             self.trajectory_index += self.trajectory_step
-            # Progress訊息已刪除 - 不輸出到終端機
         else:
             if self.skip_unreachable_points:
                 if self.skipped_points_count > len(self.trajectory_points) * 0.2:
-                    # 不可達點過多 - 不輸出到終端機
                     self.is_following_trajectory = False
                     self.skipped_points_count = 0
                     self.clear_trajectory_markers()
@@ -516,33 +552,30 @@ class AnimationController:
 
                 while self.trajectory_index < len(self.trajectory_points):
                     if self.skipped_points_count > len(self.trajectory_points) * 0.2:
-                        # 不可達點過多 - 不輸出到終端機
                         self.is_following_trajectory = False
                         self.skipped_points_count = 0
                         self.clear_trajectory_markers()
                         return
 
                     pt_next = self.trajectory_points[self.trajectory_index]
-                    ok_next, msg_next = self.move_to_instant(pt_next[0], pt_next[1], pt_next[2])
+                    should_render_next = (self.trajectory_index % self.trajectory_render_interval == 0)
+                    ok_next, msg_next = self.move_to_instant(pt_next[0], pt_next[1], pt_next[2],
+                                                             render=should_render_next)
 
                     if ok_next:
                         found_reachable = True
                         self.trajectory_index += self.trajectory_step
-                        # 找到可達點 - 不輸出到終端機
                         break
                     else:
                         self.skipped_points_count += 1
                         self.trajectory_index += self.trajectory_step
                         consecutive_skips += 1
-                        # 連續跳過訊息已刪除
 
                 if not found_reachable:
-                    # 到達終點 - 不輸出到終端機
                     self.is_following_trajectory = False
                     self.skipped_points_count = 0
                     self.clear_trajectory_markers()
             else:
-                # 失敗訊息已刪除 - 不輸出到終端機
                 self.is_following_trajectory = False
                 self.skipped_points_count = 0
                 self.clear_trajectory_markers()
@@ -992,7 +1025,7 @@ def main_loop():
     pos = ctrl.get_joint5_position()
     marker = o3d.geometry.TriangleMesh.create_sphere(radius=0.08)
     marker.paint_uniform_color([1, 0, 0])
-    marker.compute_vertex_normals()
+    marker.compute_vertex_normals()  # 恢復光影效果
     marker.translate(pos)
     vis.add_geometry(marker)
     ctrl.set_marker(marker)
@@ -1005,7 +1038,7 @@ def main_loop():
     try:
         while not exit_flag:
             now = time.time()
-            if now - last > 1 / 60:  # Open3D 保持 60 FPS
+            if now - last > 1 / 10:  # Open3D 更新頻率改為 10 FPS (大幅節省資源)
                 ctrl.animate()
                 last = now
             vis.poll_events()
