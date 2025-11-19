@@ -95,8 +95,8 @@ print("=" * 60 + "\n")
 
 # ---------- 載入模型 ----------
 # paths = [rf"/home/yahboom/Desktop/Obj/p{i}.obj" for i in range(1, 9)]
-paths = [rf"/home/test/桌面/Obj/p{i}.obj" for i in range(1, 9)]
-#paths = [rf"C:\Users\Administrator\OneDrive - Ming Chuan University\Desktop\Obj\p{i}.obj" for i in range(1, 9)]
+#paths = [rf"/home/test/桌面/Obj/p{i}.obj" for i in range(1, 9)]
+paths = [rf"C:\Users\Administrator\OneDrive - Ming Chuan University\Desktop\Obj\p{i}.obj" for i in range(1, 9)]
 meshes = [o3d.io.read_triangle_mesh(p) for p in paths]
 if not all(m.has_triangles() for m in meshes):
     print("模型載入失敗")
@@ -266,14 +266,23 @@ class AnimationController:
         )
 
     def update_joint5_marker(self):
+        """更新關節5標記位置"""
         if self.joint5_marker is None:
             return
-        pos = self.get_joint5_position()
+
+        # 計算新位置
+        new_pos = self.get_joint5_position()
+
+        # 移除舊標記
         vis.remove_geometry(self.joint5_marker, reset_bounding_box=False)
+
+        # 重新創建標記在新位置
         self.joint5_marker = o3d.geometry.TriangleMesh.create_sphere(radius=0.08)
         self.joint5_marker.paint_uniform_color([1.0, 0.0, 0.0])
         self.joint5_marker.compute_vertex_normals()
-        self.joint5_marker.translate(pos)
+        self.joint5_marker.translate(new_pos)
+
+        # 添加新標記
         vis.add_geometry(self.joint5_marker, reset_bounding_box=False)
 
     def update_joint(self, joint_idx, delta_angle):
@@ -991,7 +1000,7 @@ def main_loop():
     global exit_flag
     pos = ctrl.get_joint5_position()
     marker = o3d.geometry.TriangleMesh.create_sphere(radius=0.08)
-    marker.paint_uniform_color([1, 0, 0])
+    marker.paint_uniform_color([1.0, 0.0, 0.0])
     marker.compute_vertex_normals()
     marker.translate(pos)
     vis.add_geometry(marker)
@@ -1005,7 +1014,7 @@ def main_loop():
     try:
         while not exit_flag:
             now = time.time()
-            if now - last > 1 / 60:  # Open3D 保持 60 FPS
+            if now - last > 1 / 20:  # Open3D 保持 60 FPS
                 ctrl.animate()
                 last = now
             vis.poll_events()
