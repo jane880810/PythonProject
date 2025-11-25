@@ -11,6 +11,7 @@ Tkinter 控制介面(增強版 GUI)
 6. 主迴圈更新頻率改為 100Hz
 7. Joint5 紅球改為平移更新,不重建
 8. 執行圓弧移動時保存1000點座標到日期命名的文字檔
+9. 綠色弧形軌跡在執行完點的移動後依序清除
 '''
 
 import open3d as o3d
@@ -282,7 +283,7 @@ class AnimationController:
         )
 
     def update_joint5_marker(self):
-        """更新關節5標記位置：改為平移,不重建"""
+        """更新關節5標記位置:改為平移,不重建"""
         if self.joint5_marker is None:
             return
 
@@ -472,13 +473,18 @@ class AnimationController:
 
         return True, "ok"
 
-    def show_trajectory(self, points):
-        """顯示軌跡線"""
+    def show_trajectory(self, points, start_index=0):
+        """顯示軌跡線(從start_index開始)"""
         if self.trajectory_line:
             vis.remove_geometry(self.trajectory_line, reset_bounding_box=False)
 
-        pts = o3d.utility.Vector3dVector(points)
-        lns = [[i, i + 1] for i in range(len(points) - 1)]
+        if start_index >= len(points) - 1:
+            self.trajectory_line = None
+            return
+
+        remaining_points = points[start_index:]
+        pts = o3d.utility.Vector3dVector(remaining_points)
+        lns = [[i, i + 1] for i in range(len(remaining_points) - 1)]
         ls = o3d.geometry.LineSet()
         ls.points = pts
         ls.lines = o3d.utility.Vector2iVector(lns)
@@ -516,6 +522,8 @@ class AnimationController:
 
         if ok:
             self.trajectory_index += self.trajectory_step
+            # 更新軌跡顯示,只顯示剩餘的部分
+            self.show_trajectory(self.trajectory_points, self.trajectory_index)
         else:
             if self.skip_unreachable_points:
                 if self.skipped_points_count > len(self.trajectory_points) * 0.2:
@@ -544,6 +552,8 @@ class AnimationController:
                     if ok_next:
                         found_reachable = True
                         self.trajectory_index += self.trajectory_step
+                        # 更新軌跡顯示
+                        self.show_trajectory(self.trajectory_points, self.trajectory_index)
                         break
                     else:
                         self.skipped_points_count += 1
