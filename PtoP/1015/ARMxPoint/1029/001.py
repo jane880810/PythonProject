@@ -1,6 +1,9 @@
 '''
 Open3D 視窗（顯示 3D 機械手臂）
 Tkinter 控制介面（增強版 GUI）
+新增功能：
+1. 關節動畫速度調節
+2. 軌跡點跳躍拉桿（一次跳多個點）
 '''
 
 import open3d as o3d
@@ -189,7 +192,7 @@ class AnimationController:
 
         self.current_angles = [0, 0, 0, 0, 0, 0]
         self.target_angles = [0, 0, 0, 0, 0, 0]
-        self.animation_speed = 0.12
+        self.animation_speed = 0.12  # 關節動畫速度（新增可調）
         self.is_animating = False
         self.joint_scales = []
 
@@ -214,6 +217,7 @@ class AnimationController:
         self.is_following_trajectory = False
         self.trajectory_index = 0
         self.trajectory_delay = 0.005
+        self.trajectory_step = 1  # 新增：每次跳過的點數
         self.last_trajectory_time = 0
         self.skip_unreachable_points = True
         self.skipped_points_count = 0
@@ -469,14 +473,17 @@ class AnimationController:
         ok, msg = self.move_to_instant(pt[0], pt[1], pt[2])
 
         if ok:
-            self.trajectory_index += 1
-            if self.trajectory_index % 100 == 0:
+            # 新增：根據 trajectory_step 跳過點
+            self.trajectory_index += self.trajectory_step
+            if self.trajectory_index % (100 * self.trajectory_step) == 0 or self.trajectory_index % 100 < self.trajectory_step:
                 delay_ms = self.trajectory_delay * 1000
                 if delay_ms < 0.001:
                     delay_str = "No delay"
                 else:
                     delay_str = f"{delay_ms:.2f}ms"
-                print(f"Progress: {self.trajectory_index}/{len(self.trajectory_points)} (Delay: {delay_str})")
+                actual_points = len(self.trajectory_points) // self.trajectory_step
+                current_progress = self.trajectory_index // self.trajectory_step
+                print(f"Progress: {current_progress}/{actual_points} (Step: {self.trajectory_step}, Delay: {delay_str})")
         else:
             if self.skip_unreachable_points:
                 if self.skipped_points_count > len(self.trajectory_points) * 0.2:
@@ -487,7 +494,7 @@ class AnimationController:
 
                 self.skipped_points_count += 1
                 first_skip_index = self.trajectory_index
-                self.trajectory_index += 1
+                self.trajectory_index += self.trajectory_step  # 使用 step 跳過
 
                 print(f"⚠ Skipping unreachable point {first_skip_index}/{len(self.trajectory_points)}: {msg}")
                 print(f"  Target: ({pt[0]:.3f}, {pt[1]:.3f}, {pt[2]:.3f})")
@@ -507,12 +514,12 @@ class AnimationController:
 
                     if ok_next:
                         found_reachable = True
-                        self.trajectory_index += 1
+                        self.trajectory_index += self.trajectory_step
                         print(f"✓ Found reachable point after skipping {consecutive_skips} points (now at {self.trajectory_index}/{len(self.trajectory_points)})")
                         break
                     else:
                         self.skipped_points_count += 1
-                        self.trajectory_index += 1
+                        self.trajectory_index += self.trajectory_step
                         consecutive_skips += 1
 
                         if consecutive_skips % 10 == 0:
@@ -534,6 +541,15 @@ class AnimationController:
     def set_trajectory_speed(self, speed):
         """設定軌跡速度（調整延遲時間）"""
         self.trajectory_delay = 0.005 * (1000 - speed) / 999
+
+    def set_animation_speed(self, speed):
+        """新增：設定關節動畫速度"""
+        # speed 範圍 1-100，轉換為 0.01-1.0
+        self.animation_speed = speed / 100.0
+
+    def set_trajectory_step(self, step):
+        """新增：設定軌跡點跳躍步數"""
+        self.trajectory_step = max(1, int(step))
 
     def stop_trajectory(self):
         self.is_following_trajectory = False
@@ -563,8 +579,8 @@ class RobotControlGUI:
     def __init__(self, root, controller):
         self.root = root
         self.ctrl = controller
-        self.root.title("RA605-710-GC 六軸機械手臂控制系統")
-        self.root.geometry("900x700")
+        self.root.title("RA605-710-GC 六軸機械手臂控制系統 (增強版)")
+        self.root.geometry("950x750")
 
         self.preset_file = "robot_presets.json"
         self.presets = self.load_presets()
@@ -631,8 +647,25 @@ class RobotControlGUI:
 
         self.ctrl.joint_scales = self.joint_scales
 
+        # 新增：動畫速度控制
+        anim_frame = ttk.LabelFrame(frame, text="動畫速度", padding="5")
+        anim_frame.grid(row=len(joint_config)*2, column=0, pady=10, sticky=(tk.W, tk.E))
+
+        speed_control_frame = ttk.Frame(anim_frame)
+        speed_control_frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(speed_control_frame, text="關節速度:").pack(side=tk.LEFT)
+        self.anim_speed_scale = ttk.Scale(speed_control_frame, from_=1, to=100,
+                                         orient=tk.HORIZONTAL,
+                                         command=self.on_anim_speed_change)
+        self.anim_speed_scale.set(12)  # 預設 0.12
+        self.anim_speed_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        self.anim_speed_label = ttk.Label(speed_control_frame, text="12%", width=6)
+        self.anim_speed_label.pack(side=tk.LEFT)
+
         btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=len(joint_config)*2, column=0, pady=10)
+        btn_frame.grid(row=len(joint_config)*2+1, column=0, pady=5)
 
         ttk.Button(btn_frame, text="重置姿態",
                   command=self.reset_pose).pack(side=tk.LEFT, padx=2)
@@ -705,6 +738,7 @@ class RobotControlGUI:
         self.radius_scale.configure(command=lambda v: self.radius_label.configure(
             text=f"{float(v):.2f}"))
 
+        # 軌跡速度控制
         speed_frame = ttk.Frame(traj_frame)
         speed_frame.pack(fill=tk.X, pady=5)
 
@@ -717,6 +751,20 @@ class RobotControlGUI:
 
         self.speed_label = ttk.Label(speed_frame, text="100x", width=8)
         self.speed_label.pack(side=tk.LEFT)
+
+        # 新增：點跳躍控制
+        step_frame = ttk.Frame(traj_frame)
+        step_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(step_frame, text="點跳躍:").pack(side=tk.LEFT)
+        self.step_scale = ttk.Scale(step_frame, from_=1, to=50,
+                                   orient=tk.HORIZONTAL,
+                                   command=self.on_step_change)
+        self.step_scale.set(1)
+        self.step_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        self.step_label = ttk.Label(step_frame, text="每1點", width=8)
+        self.step_label.pack(side=tk.LEFT)
 
         option_frame = ttk.Frame(traj_frame)
         option_frame.pack(fill=tk.X, pady=5)
@@ -796,7 +844,7 @@ class RobotControlGUI:
         ttk.Button(frame, text="關閉程式",
                   command=self.quit_program).pack(side=tk.RIGHT, padx=5)
 
-        self.info_label = ttk.Label(frame, text="RA605-710-GC 六軸機械手臂",
+        self.info_label = ttk.Label(frame, text="RA605-710-GC 六軸機械手臂 (增強版)",
                                    font=('Arial', 9))
         self.info_label.pack(side=tk.LEFT, padx=5)
 
@@ -806,8 +854,14 @@ class RobotControlGUI:
         self.joint_labels[joint_idx].configure(text=f"{angle:.1f}°")
         self.ctrl.set_target(joint_idx, angle)
 
+    def on_anim_speed_change(self, value):
+        """新增：動畫速度變更"""
+        speed = int(float(value))
+        self.ctrl.set_animation_speed(speed)
+        self.anim_speed_label.configure(text=f"{speed}%")
+
     def on_speed_change(self, value):
-        """速度變更"""
+        """軌跡速度變更"""
         speed = int(float(value))
         self.ctrl.set_trajectory_speed(speed)
         delay_ms = (0.005 * (1000 - speed) / 999) * 1000
@@ -818,6 +872,12 @@ class RobotControlGUI:
             delay_str = f"{delay_ms:.2f}ms"
 
         self.speed_label.configure(text=f"{speed}x ({delay_str})")
+
+    def on_step_change(self, value):
+        """新增：點跳躍變更"""
+        step = int(float(value))
+        self.ctrl.set_trajectory_step(step)
+        self.step_label.configure(text=f"每{step}點")
 
     def toggle_skip(self):
         """切換跳過選項"""
@@ -839,8 +899,10 @@ class RobotControlGUI:
             arc, _, _, C = compute_arc_with_auto_center(A, B, radius, 1000)
 
             length = np.sum(np.sqrt(np.sum(np.diff(arc, axis=0)**2, axis=1)))
+            step = self.ctrl.trajectory_step
+            actual_points = len(arc) // step
 
-            self.update_status(f"軌跡長度: {length:.3f}m\n執行中...")
+            self.update_status(f"軌跡長度: {length:.3f}m\n總點數: {len(arc)}\n實際執行: {actual_points}點\n執行中...")
             self.ctrl.start_trajectory(arc)
 
         except Exception as e:
@@ -887,8 +949,11 @@ class RobotControlGUI:
             if self.ctrl.is_following_trajectory and self.ctrl.trajectory_points is not None:
                 total = len(self.ctrl.trajectory_points)
                 current = self.ctrl.trajectory_index
+                step = self.ctrl.trajectory_step
+                actual_total = total // step
+                actual_current = current // step
                 progress = (current / total * 100) if total > 0 else 0
-                self.update_status(f"執行中... {current}/{total} ({progress:.1f}%)")
+                self.update_status(f"執行中... {actual_current}/{actual_total} ({progress:.1f}%)\nStep: 每{step}點")
 
             self.root.after(50, self.update_display)
         except:

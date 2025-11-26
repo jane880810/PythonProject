@@ -71,12 +71,21 @@ TRAJECTORY_CONFIG = {
 }
 
 # ========== 模型路徑配置 ==========
+'''
 MODEL_CONFIG = {
     'obj_path': '/home/yahboom/Desktop/Obj/',
     'model_count': 8,
     'model_prefix': 'p',
     'model_extension': '.obj',
 }
+'''
+MODEL_CONFIG = {
+    'obj_path': '/home/test/桌面/Obj/',
+    'model_count': 8,
+    'model_prefix': 'p',
+    'model_extension': '.obj',
+}
+
 
 # ========== 初始平移量（根據你的數據）==========
 INITIAL_TRANSLATIONS = {
