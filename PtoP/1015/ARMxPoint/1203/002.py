@@ -1,11 +1,19 @@
 '''
-20251128
+20251119
 Open3D 視窗(顯示 3D 機械手臂)
 Tkinter 控制介面(增強版 GUI)
-修改功能:
-1. 關節1-3控制改為滑桿
-2. GUI更新率改為每秒30次
-3. 目標位置Y改為0.3
+新增功能:
+1. 關節動畫速度調節
+2. 軌跡點跳躍拉桿(一次跳多個點)
+3. 已刪除終端機輸出
+4. GUI更新頻率改為20Hz
+5. 視窗並排顯示
+6. 主迴圈更新頻率改為 100Hz
+7. Joint5 紅球改為平移更新,不重建
+8. 執行圓弧移動時保存1000點座標到日期命名的文字檔
+9. 綠色弧形軌跡在執行完點的移動後依序清除
+10. 關節1、2、3改為拉桿控制
+11. Y預設值改為0.3
 '''
 
 import open3d as o3d
@@ -97,8 +105,8 @@ print("=" * 60 + "\n")
 
 # ---------- 載入模型 ----------
 
-paths = [rf"/home/yahboom/Desktop/Obj/p{i}.obj" for i in range(1, 9)]
-#paths = [rf"/home/test/桌面/Obj/p{i}.obj" for i in range(1, 9)]
+# paths = [rf"/home/yahboom/Desktop/Obj/p{i}.obj" for i in range(1, 9)]
+paths = [rf"/home/test/桌面/Obj/p{i}.obj" for i in range(1, 9)]
 # paths = [rf"C:\Users\Administrator\OneDrive - Ming Chuan University\Desktop\Obj\p{i}.obj" for i in range(1, 9)]
 
 meshes = [o3d.io.read_triangle_mesh(p) for p in paths]
@@ -626,7 +634,7 @@ class RobotControlGUI:
         self.create_system_control(main_frame)
 
     def create_joint_control(self, parent):
-        """關節控制面板 - 滑桿版本"""
+        """關節控制面板 - 使用拉桿控制"""
         frame = ttk.LabelFrame(parent, text="關節控制", padding="10")
         frame.grid(row=0, column=0, padx=5, pady=5, sticky=(tk.N, tk.S))
 
@@ -640,10 +648,10 @@ class RobotControlGUI:
         ]
 
         self.joint_labels = []
-        self.joint_scales = []
+        self.ctrl.joint_scales = []
 
         for i, (name, min_val, max_val) in enumerate(joint_config):
-            # 標題框架
+            # 標題列
             header_frame = ttk.Frame(frame)
             header_frame.grid(row=i * 2, column=0, sticky=tk.W, pady=(10 if i > 0 else 0, 5))
 
@@ -654,30 +662,20 @@ class RobotControlGUI:
             value_label.pack(side=tk.RIGHT)
             self.joint_labels.append(value_label)
 
-            # 滑桿框架
+            # 拉桿控制列
             control_frame = ttk.Frame(frame)
             control_frame.grid(row=i * 2 + 1, column=0, sticky=(tk.W, tk.E), padx=5)
 
-            # 滑桿
-            slider_frame = ttk.Frame(control_frame)
-            slider_frame.pack(fill=tk.X)
-
-            scale = ttk.Scale(slider_frame, from_=min_val, to=max_val,
-                             orient=tk.HORIZONTAL,
-                             command=self._make_scale_command(i))
+            scale = ttk.Scale(control_frame, from_=min_val, to=max_val,
+                              orient=tk.HORIZONTAL, command=self.ctrl._make_scale_command(i))
             scale.set(0)
-            scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+            scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+            self.ctrl.joint_scales.append(scale)
 
-            # 範圍標籤
-            range_label = ttk.Label(slider_frame,
-                                   text=f"[{min_val}° ~ {max_val}°]",
-                                   font=('Arial', 8), foreground='gray')
+            range_label = ttk.Label(control_frame,
+                                    text=f"[{min_val}° ~ {max_val}°]",
+                                    font=('Arial', 8), foreground='gray')
             range_label.pack(side=tk.LEFT)
-
-            self.joint_scales.append(scale)
-
-        # 將滑桿列表傳給控制器
-        self.ctrl.joint_scales = self.joint_scales
 
         # 動畫速度控制
         anim_frame = ttk.LabelFrame(frame, text="動畫速度", padding="5")
@@ -704,10 +702,6 @@ class RobotControlGUI:
 
         ttk.Button(btn_frame, text="重置姿態",
                    command=self.reset_pose).pack(fill=tk.X, pady=2)
-
-    def _make_scale_command(self, idx):
-        """創建滑桿命令回調(正確捕獲索引)"""
-        return lambda v: self.ctrl.set_target(idx, float(v))
 
     def create_position_control(self, parent):
         """位置控制與軌跡規劃面板"""
@@ -966,7 +960,7 @@ class RobotControlGUI:
         self.status_text.config(state='disabled')
 
     def update_display(self):
-        """更新顯示 - 每秒30次更新(約33ms)"""
+        """更新顯示 - 20Hz更新頻率"""
         try:
             pos = self.ctrl.get_joint5_position()
             for i, axis in enumerate(['X', 'Y', 'Z']):
@@ -983,7 +977,7 @@ class RobotControlGUI:
                 status_msg = f"執行中... {current}/{total} ({progress:.1f}%)\n倍速: {step}倍"
                 self.update_status(status_msg)
 
-            self.root.after(33, self.update_display)  # 改為33ms (約30Hz)
+            self.root.after(50, self.update_display)
         except:
             pass
 

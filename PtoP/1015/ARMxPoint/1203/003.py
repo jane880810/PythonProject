@@ -914,7 +914,7 @@ class RobotControlGUI:
 
             with open(filepath, 'w') as f:
                 for i, point in enumerate(arc, start=1):
-                    f.write(f"{i} {point[0]:.6f} {point[1]:.6f} {point[2]:.6f}\n")
+                    f.write(f"{i} {point[0]*1000:.3f} {point[1]*1000:.3f} {point[2]*1000:.3f} 0 0 -1\n") #1 * * * * * *
 
             length = np.sum(np.sqrt(np.sum(np.diff(arc, axis=0) ** 2, axis=1)))
             step = self.ctrl.trajectory_step
