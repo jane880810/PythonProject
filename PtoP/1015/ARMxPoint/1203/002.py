@@ -1,17 +1,11 @@
 '''
-20251119
+20251128
 Open3D 視窗(顯示 3D 機械手臂)
 Tkinter 控制介面(增強版 GUI)
-新增功能:
-1. 關節動畫速度調節
-2. 軌跡點跳躍拉桿(一次跳多個點)
-3. 已刪除終端機輸出
-4. GUI更新頻率改為1秒
-5. 視窗並排顯示
-6. 主迴圈更新頻率改為 100Hz
-7. Joint5 紅球改為平移更新,不重建
-8. 執行圓弧移動時保存1000點座標到日期命名的文字檔
-9. 綠色弧形軌跡在執行完點的移動後依序清除
+修改功能:
+1. 關節1-3控制改為滑桿
+2. GUI更新率改為每秒30次
+3. 目標位置Y改為0.3
 '''
 
 import open3d as o3d
@@ -608,29 +602,6 @@ exit_flag = False
 # ---------- 增強版 GUI ----------
 
 class RobotControlGUI:
-    def set_joint_angle(self, joint_idx, entry):
-        """從輸入框設定關節角度"""
-        try:
-            angle = float(entry.get())
-
-            joint_limits = [
-                (-165, 165),
-                (-125, 85),
-                (-55, 185),
-            ]
-            min_val, max_val = joint_limits[joint_idx]
-
-            if angle < min_val or angle > max_val:
-                messagebox.showwarning("警告",
-                                       f"角度超出範圍!\n允許範圍: [{min_val}° ~ {max_val}°]")
-                return
-
-            self.ctrl.set_target(joint_idx, angle)
-            entry.delete(0, tk.END)
-
-        except ValueError:
-            messagebox.showerror("錯誤", "請輸入有效的數字!")
-
     def __init__(self, root, controller):
         self.root = root
         self.ctrl = controller
@@ -655,23 +626,24 @@ class RobotControlGUI:
         self.create_system_control(main_frame)
 
     def create_joint_control(self, parent):
-        """關節控制面板 - 修改版"""
+        """關節控制面板 - 滑桿版本"""
         frame = ttk.LabelFrame(parent, text="關節控制", padding="10")
         frame.grid(row=0, column=0, padx=5, pady=5, sticky=(tk.N, tk.S))
 
         joint_config = [
-            ("關節 1 (Base)", -165, 165, True),
-            ("關節 2 (Shoulder)", -125, 85, True),
-            ("關節 3 (Elbow)", -55, 185, True),
-            ("關節 4 (Wrist Z)", -190, 190, False),
-            ("關節 5 (Wrist Y)", -25, 205, False),
-            ("關節 6 (Wrist X)", -360, 360, False)
+            ("關節 1 (Base)", -165, 165),
+            ("關節 2 (Shoulder)", -125, 85),
+            ("關節 3 (Elbow)", -55, 185),
+            ("關節 4 (Wrist Z)", -190, 190),
+            ("關節 5 (Wrist Y)", -25, 205),
+            ("關節 6 (Wrist X)", -360, 360)
         ]
 
         self.joint_labels = []
-        self.joint_entries = []
+        self.joint_scales = []
 
-        for i, (name, min_val, max_val, has_input) in enumerate(joint_config):
+        for i, (name, min_val, max_val) in enumerate(joint_config):
+            # 標題框架
             header_frame = ttk.Frame(frame)
             header_frame.grid(row=i * 2, column=0, sticky=tk.W, pady=(10 if i > 0 else 0, 5))
 
@@ -682,34 +654,32 @@ class RobotControlGUI:
             value_label.pack(side=tk.RIGHT)
             self.joint_labels.append(value_label)
 
+            # 滑桿框架
             control_frame = ttk.Frame(frame)
             control_frame.grid(row=i * 2 + 1, column=0, sticky=(tk.W, tk.E), padx=5)
 
-            if has_input:
-                input_frame = ttk.Frame(control_frame)
-                input_frame.pack(fill=tk.X)
+            # 滑桿
+            slider_frame = ttk.Frame(control_frame)
+            slider_frame.pack(fill=tk.X)
 
-                ttk.Label(input_frame, text="輸入角度:").pack(side=tk.LEFT, padx=(0, 5))
+            scale = ttk.Scale(slider_frame, from_=min_val, to=max_val,
+                             orient=tk.HORIZONTAL,
+                             command=self._make_scale_command(i))
+            scale.set(0)
+            scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
-                entry = ttk.Entry(input_frame, width=10)
-                entry.pack(side=tk.LEFT, padx=5)
-                self.joint_entries.append(entry)
+            # 範圍標籤
+            range_label = ttk.Label(slider_frame,
+                                   text=f"[{min_val}° ~ {max_val}°]",
+                                   font=('Arial', 8), foreground='gray')
+            range_label.pack(side=tk.LEFT)
 
-                set_btn = ttk.Button(input_frame, text="設定",
-                                     command=lambda idx=i, e=entry: self.set_joint_angle(idx, e))
-                set_btn.pack(side=tk.LEFT, padx=5)
+            self.joint_scales.append(scale)
 
-                range_label = ttk.Label(input_frame,
-                                        text=f"[{min_val}° ~ {max_val}°]",
-                                        font=('Arial', 8), foreground='gray')
-                range_label.pack(side=tk.LEFT, padx=(10, 0))
-            else:
-                self.joint_entries.append(None)
-                range_label = ttk.Label(control_frame,
-                                        text=f"範圍: [{min_val}° ~ {max_val}°]",
-                                        font=('Arial', 8), foreground='gray')
-                range_label.pack(anchor=tk.W)
+        # 將滑桿列表傳給控制器
+        self.ctrl.joint_scales = self.joint_scales
 
+        # 動畫速度控制
         anim_frame = ttk.LabelFrame(frame, text="動畫速度", padding="5")
         anim_frame.grid(row=len(joint_config) * 2, column=0, pady=10, sticky=(tk.W, tk.E))
 
@@ -728,17 +698,23 @@ class RobotControlGUI:
 
         self.anim_speed_scale.configure(command=self.on_anim_speed_change)
 
+        # 重置按鈕
         btn_frame = ttk.Frame(frame)
         btn_frame.grid(row=len(joint_config) * 2 + 1, column=0, pady=10)
 
         ttk.Button(btn_frame, text="重置姿態",
                    command=self.reset_pose).pack(fill=tk.X, pady=2)
 
+    def _make_scale_command(self, idx):
+        """創建滑桿命令回調(正確捕獲索引)"""
+        return lambda v: self.ctrl.set_target(idx, float(v))
+
     def create_position_control(self, parent):
         """位置控制與軌跡規劃面板"""
         frame = ttk.Frame(parent)
         frame.grid(row=0, column=1, padx=5, pady=5, sticky=(tk.N, tk.S, tk.W, tk.E))
 
+        # 當前位置顯示
         current_frame = ttk.LabelFrame(frame, text="當前末端位置 (J5)", padding="10")
         current_frame.pack(fill=tk.X, pady=(0, 10))
 
@@ -754,13 +730,14 @@ class RobotControlGUI:
             label.grid(row=0, column=i * 2 + 1, padx=5)
             self.current_labels[axis] = label
 
+        # 目標位置設定
         target_frame = ttk.LabelFrame(frame, text="目標位置設定", padding="10")
         target_frame.pack(fill=tk.X, pady=(0, 10))
 
         self.target_scales = {}
         target_config = [
             ('X', -0.7, 0.7, 0.3),
-            ('Y', -0.7, 0.7, 0.0),
+            ('Y', -0.7, 0.7, 0.3),
             ('Z', 0.0, 1.0, 0.8)
         ]
 
@@ -783,9 +760,11 @@ class RobotControlGUI:
 
             self.target_scales[axis] = scale
 
+        # 圓弧軌跡控制
         traj_frame = ttk.LabelFrame(frame, text="圓弧軌跡控制", padding="10")
         traj_frame.pack(fill=tk.BOTH, expand=True)
 
+        # 圓弧係數
         radius_frame = ttk.Frame(traj_frame)
         radius_frame.pack(fill=tk.X, pady=5)
 
@@ -800,6 +779,7 @@ class RobotControlGUI:
         self.radius_scale.configure(command=lambda v: self.radius_label.configure(
             text=f"{float(v):.2f}"))
 
+        # 軌跡速度
         speed_frame = ttk.Frame(traj_frame)
         speed_frame.pack(fill=tk.X, pady=5)
 
@@ -815,6 +795,7 @@ class RobotControlGUI:
 
         self.speed_scale.configure(command=self.on_speed_change)
 
+        # 動畫倍速
         step_frame = ttk.Frame(traj_frame)
         step_frame.pack(fill=tk.X, pady=5)
 
@@ -830,6 +811,7 @@ class RobotControlGUI:
 
         self.step_scale.configure(command=self.on_step_change)
 
+        # 選項
         option_frame = ttk.Frame(traj_frame)
         option_frame.pack(fill=tk.X, pady=5)
 
@@ -838,6 +820,7 @@ class RobotControlGUI:
                         variable=self.skip_var,
                         command=self.toggle_skip).pack(anchor=tk.W)
 
+        # 狀態顯示
         status_frame = ttk.Frame(traj_frame)
         status_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
@@ -859,6 +842,7 @@ class RobotControlGUI:
         status_scrollbar.config(command=self.status_text.yview)
         self.update_status("準備就緒")
 
+        # 控制按鈕
         btn_frame = ttk.Frame(traj_frame)
         btn_frame.pack(fill=tk.X, pady=5)
 
@@ -982,7 +966,7 @@ class RobotControlGUI:
         self.status_text.config(state='disabled')
 
     def update_display(self):
-        """更新顯示 - 每秒更新一次以節省CPU資源"""
+        """更新顯示 - 每秒30次更新(約33ms)"""
         try:
             pos = self.ctrl.get_joint5_position()
             for i, axis in enumerate(['X', 'Y', 'Z']):
@@ -999,7 +983,7 @@ class RobotControlGUI:
                 status_msg = f"執行中... {current}/{total} ({progress:.1f}%)\n倍速: {step}倍"
                 self.update_status(status_msg)
 
-            self.root.after(1000, self.update_display)
+            self.root.after(33, self.update_display)  # 改為33ms (約30Hz)
         except:
             pass
 
