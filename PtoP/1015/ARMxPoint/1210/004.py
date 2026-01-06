@@ -255,6 +255,8 @@ class AnimationController:
         # 速度計算相關變量（基於固定末端速度10cm/s）
         self.last_angles = [0, 0, 0, 0, 0, 0]  # 上一次關節角度
         self.joint_velocities = [0.0, 0.0, 0.0]  # 關節1、2、3的轉速 (rpm)
+        self.motor_velocities = [0.0, 0.0, 0.0]  # 馬達1、2、3的轉速 (rpm)
+        self.gear_ratio = 100  # 減速比 1:100 (馬達轉100圈，關節轉1圈)
         self.end_velocity = 0.1  # 固定末端速度 0.1 m/s = 10 cm/s
         self.last_trajectory_point = None  # 上一個軌跡點位置
 
@@ -313,40 +315,56 @@ class AnimationController:
         vis.update_geometry(self.joint5_marker)
 
     def calculate_joint_velocities(self, current_point):
-        """根據固定末端速度(10cm/s)和軌跡點距離計算關節轉速"""
+        """根據固定末端速度(10cm/s)和軌跡點距離計算關節轉速
+
+        計算邏輯：
+        1. 座標單位：m (公尺)
+        2. 末端速度：0.1 m/s = 10 cm/s (固定值)
+        3. 移動時間 = 距離(m) / 速度(m/s) = 時間(s)
+        4. 角速度 = 角度變化(deg) / 時間(s) = deg/s
+        5. RPM = 角速度(deg/s) / 360° × 60秒
+        """
         if self.last_trajectory_point is None:
             self.last_trajectory_point = current_point
             self.last_angles = self.current_angles.copy()
             return
 
-        # 計算末端移動距離
+        # 計算末端移動距離（單位：m）
         point_diff = np.array(current_point) - np.array(self.last_trajectory_point)
-        distance = np.linalg.norm(point_diff)
+        distance = np.linalg.norm(point_diff)  # 單位：m
 
         if distance < 0.0001:  # 距離太小，忽略
             return
 
         # 根據固定速度計算移動時間
         # 末端速度 = 0.1 m/s = 10 cm/s
-        time_elapsed = distance / self.end_velocity
+        # 時間(s) = 距離(m) / 速度(m/s)
+        time_elapsed = distance / self.end_velocity  # 單位：s
 
         if time_elapsed < 0.0001:  # 避免除以零
             return
 
         # 計算各關節角速度並轉換為rpm
         for i in range(3):  # 只計算關節1、2、3
-            angle_diff = self.current_angles[i] - self.last_angles[i]
+            angle_diff = self.current_angles[i] - self.last_angles[i]  # 單位：deg
 
             # 處理角度跳變（例如從-180到180）
             if abs(angle_diff) > 180:
                 angle_diff = angle_diff - 360 * np.sign(angle_diff)
 
-            # 角速度 (deg/s)
-            angular_velocity_deg_s = angle_diff / time_elapsed
+            # 角速度 (deg/s) = 角度變化(deg) / 時間(s)
+            angular_velocity_deg_s = angle_diff / time_elapsed  # 單位：deg/s
 
             # 轉換為 rpm (每分鐘轉數)
-            # rpm = (deg/s) / 360 * 60
-            self.joint_velocities[i] = abs(angular_velocity_deg_s) / 360.0 * 60.0
+            # rpm = (deg/s) / 360° × 60秒
+            # 公式推導：1轉 = 360度，1分鐘 = 60秒
+            # 轉/分鐘 = (度/秒) × (1轉/360度) × (60秒/1分鐘)
+            self.joint_velocities[i] = abs(angular_velocity_deg_s) / 360.0 * 60.0  # 單位：rpm (關節輸出軸)
+
+            # 計算馬達實際轉速（考慮減速比 1:100）
+            # 馬達轉100圈 = 關節轉1圈
+            # 馬達RPM = 關節RPM × 100
+            self.motor_velocities[i] = self.joint_velocities[i] * self.gear_ratio  # 單位：rpm (馬達軸)
 
         # 更新上一次的值
         self.last_trajectory_point = current_point
@@ -603,6 +621,7 @@ class AnimationController:
         self.last_trajectory_point = None
         self.last_angles = self.current_angles.copy()
         self.joint_velocities = [0.0, 0.0, 0.0]
+        self.motor_velocities = [0.0, 0.0, 0.0]
 
         # 不清除現有的殘影，讓它們繼續依時間自動消失
         # 舊的殘影會在 update_trail() 中自動移除（超過10秒的點）
@@ -619,6 +638,7 @@ class AnimationController:
             # 軌跡完成，殘影會自動依時間消失
             # 重置速度顯示
             self.joint_velocities = [0.0, 0.0, 0.0]
+            self.motor_velocities = [0.0, 0.0, 0.0]
             self.last_trajectory_point = None
             return
 
@@ -709,6 +729,7 @@ class AnimationController:
         self.clear_trajectory_markers()
         # 重置速度顯示
         self.joint_velocities = [0.0, 0.0, 0.0]
+        self.motor_velocities = [0.0, 0.0, 0.0]
         self.last_trajectory_point = None
 
     def reset_pose(self):
@@ -727,6 +748,7 @@ class AnimationController:
 
         # 重置速度顯示
         self.joint_velocities = [0.0, 0.0, 0.0]
+        self.motor_velocities = [0.0, 0.0, 0.0]
         self.last_trajectory_point = None
 
 
@@ -831,7 +853,7 @@ class RobotControlGUI:
                    command=self.reset_pose).pack(fill=tk.X, pady=2)
 
         # 關節速度顯示區域（放在重置姿態按鈕下方）
-        velocity_frame = ttk.LabelFrame(frame, text="關節轉速監控 (RPM)", padding="8")
+        velocity_frame = ttk.LabelFrame(frame, text="轉速監控 (減速比 1:100)", padding="8")
         velocity_frame.grid(row=len(joint_config) * 2 + 2, column=0, pady=(10, 0), sticky=(tk.W, tk.E))
 
         # 末端速度顯示
@@ -839,26 +861,40 @@ class RobotControlGUI:
         end_vel_frame.pack(fill=tk.X, pady=2)
 
         ttk.Label(end_vel_frame, text="末端速度:", font=('Arial', 9)).pack(side=tk.LEFT)
-        self.end_velocity_label = ttk.Label(end_vel_frame, text="0.00 cm/s",
+        self.end_velocity_label = ttk.Label(end_vel_frame, text="10.00 cm/s",
                                             font=('Courier', 10, 'bold'), foreground='green')
         self.end_velocity_label.pack(side=tk.LEFT, padx=10)
 
         # 分隔線
         ttk.Separator(velocity_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
 
+        # 表頭
+        header_frame = ttk.Frame(velocity_frame)
+        header_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(header_frame, text="關節", font=('Arial', 9, 'bold'), width=6).pack(side=tk.LEFT)
+        ttk.Label(header_frame, text="關節 RPM", font=('Arial', 9, 'bold'), width=12).pack(side=tk.LEFT, padx=5)
+        ttk.Label(header_frame, text="馬達 RPM", font=('Arial', 9, 'bold'), width=12).pack(side=tk.LEFT, padx=5)
+
         # 關節1、2、3轉速顯示
-        self.velocity_labels = []
+        self.joint_velocity_labels = []
+        self.motor_velocity_labels = []
+
         for i in range(3):
             vel_frame = ttk.Frame(velocity_frame)
             vel_frame.pack(fill=tk.X, pady=2)
 
-            ttk.Label(vel_frame, text=f"關節 {i+1}:",
-                     font=('Arial', 9), width=8).pack(side=tk.LEFT)
+            ttk.Label(vel_frame, text=f"J{i + 1}",
+                      font=('Arial', 9), width=6).pack(side=tk.LEFT)
 
-            vel_label = ttk.Label(vel_frame, text="0.00 RPM",
-                                 font=('Courier', 10), foreground='blue')
-            vel_label.pack(side=tk.LEFT, padx=5)
-            self.velocity_labels.append(vel_label)
+            joint_vel_label = ttk.Label(vel_frame, text="0.00",
+                                        font=('Courier', 10), foreground='blue', width=12)
+            joint_vel_label.pack(side=tk.LEFT, padx=5)
+            self.joint_velocity_labels.append(joint_vel_label)
+
+            motor_vel_label = ttk.Label(vel_frame, text="0.00",
+                                        font=('Courier', 10), foreground='red', width=12)
+            motor_vel_label.pack(side=tk.LEFT, padx=5)
+            self.motor_velocity_labels.append(motor_vel_label)
 
     def create_position_control(self, parent):
         """位置控制與軌跡規劃面板"""
@@ -1128,14 +1164,16 @@ class RobotControlGUI:
                 self.joint_labels[i].configure(text=f"{angle:.1f}°")
 
             # 更新速度顯示
-            # 末端速度 (m/s 轉換為 cm/s)
+            # 末端速度 (固定值)
             end_vel_cm_s = self.ctrl.end_velocity * 100
             self.end_velocity_label.configure(text=f"{end_vel_cm_s:.2f} cm/s")
 
-            # 關節轉速 (RPM)
+            # 關節轉速 (RPM) 和 馬達轉速 (RPM)
             for i in range(3):
-                rpm = self.ctrl.joint_velocities[i]
-                self.velocity_labels[i].configure(text=f"{rpm:.2f} RPM")
+                joint_rpm = self.ctrl.joint_velocities[i]
+                motor_rpm = self.ctrl.motor_velocities[i]
+                self.joint_velocity_labels[i].configure(text=f"{joint_rpm:.2f}")
+                self.motor_velocity_labels[i].configure(text=f"{motor_rpm:.2f}")
 
             if self.ctrl.is_following_trajectory and self.ctrl.trajectory_points is not None:
                 total = len(self.ctrl.trajectory_points)
