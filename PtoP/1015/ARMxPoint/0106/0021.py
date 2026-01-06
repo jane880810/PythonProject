@@ -9,6 +9,7 @@ Tkinter 控制介面(增強版 GUI + 障礙物功能)
 3. 碰撞檢測功能
 4. 障礙物列表顯示
 5. 軌跡執行時自動避障
+6. 障礙物控制面板移到右側
 
 原有功能:
 1. 關節動畫速度調節
@@ -289,7 +290,7 @@ node4_group.transform(T_p4_init, p3_top_center)
 # ---------- Open3D 視窗(右側) ----------
 
 vis = o3d.visualization.Visualizer()
-vis.create_window("Robot Arm with Obstacles", width=500, height=500, left=870, top=50)
+vis.create_window("Robot Arm with Obstacles", width=500, height=500, left=1300, top=50)
 
 for root in root_nodes:
     for m in root.get_all_meshes():
@@ -817,7 +818,7 @@ class RobotControlGUI:
         self.ctrl = controller
         self.obstacle_mgr = obstacle_manager
         self.root.title("RA605-710-GC 六軸機械手臂控制系統 (障礙物避障版)")
-        self.root.geometry("850x900+0+50")
+        self.root.geometry("1250x700+0+50")
 
         self.setup_ui()
         self.ctrl.set_status_callback(self.append_status)
@@ -830,11 +831,13 @@ class RobotControlGUI:
 
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
+        main_frame.columnconfigure(2, weight=1)
 
         self.create_joint_control(main_frame)
         self.create_position_control(main_frame)
-        self.create_obstacle_control(main_frame)  # 新增障礙物控制面板
+        self.create_obstacle_control(main_frame)
         self.create_system_control(main_frame)
 
     def create_joint_control(self, parent):
@@ -1039,32 +1042,32 @@ class RobotControlGUI:
                    command=self.reset_trajectory).pack(side=tk.LEFT, padx=2)
 
     def create_obstacle_control(self, parent):
-        """障礙物控制面板"""
+        """障礙物控制面板 - 放在右側"""
         frame = ttk.LabelFrame(parent, text="障礙物管理", padding="10")
-        frame.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky=(tk.W, tk.E, tk.N, tk.S))
+        frame.grid(row=0, column=2, padx=5, pady=5, sticky=(tk.W, tk.E, tk.N, tk.S))
 
-        # 左側:參數設定
-        left_frame = ttk.Frame(frame)
-        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        # 參數設定
+        params_frame = ttk.Frame(frame)
+        params_frame.pack(fill=tk.X, pady=5)
 
         # 中心位置
-        center_frame = ttk.LabelFrame(left_frame, text="中心位置 (公尺)", padding="5")
+        center_frame = ttk.LabelFrame(params_frame, text="中心位置 (公尺)", padding="5")
         center_frame.pack(fill=tk.X, pady=5)
 
         self.obs_center_scales = {}
         for axis, default in [('X', 0.30), ('Y', 0.30), ('Z', 0.65)]:
             axis_frame = ttk.Frame(center_frame)
-            axis_frame.pack(fill=tk.X, pady=3)
+            axis_frame.pack(fill=tk.X, pady=2)
 
-            ttk.Label(axis_frame, text=f"{axis}:", width=3).pack(side=tk.LEFT)
+            ttk.Label(axis_frame, text=f"{axis}:", width=2).pack(side=tk.LEFT)
 
             scale = ttk.Scale(axis_frame, from_=-0.7, to=0.7 if axis != 'Z' else 1.0,
                               orient=tk.HORIZONTAL)
             scale.set(default)
-            scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+            scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=3)
 
-            value_label = ttk.Label(axis_frame, text=f"{default:.2f}", width=6)
-            value_label.pack(side=tk.LEFT, pady=3)
+            value_label = ttk.Label(axis_frame, text=f"{default:.2f}", width=5)
+            value_label.pack(side=tk.LEFT)
 
             scale.configure(command=lambda v, lbl=value_label: lbl.configure(
                 text=f"{float(v):.2f}"))
@@ -1072,23 +1075,23 @@ class RobotControlGUI:
             self.obs_center_scales[axis] = scale
 
         # 尺寸
-        size_frame = ttk.LabelFrame(left_frame, text="尺寸 (公尺)", padding="5")
+        size_frame = ttk.LabelFrame(params_frame, text="尺寸 (公尺)", padding="5")
         size_frame.pack(fill=tk.X, pady=5)
 
         self.obs_size_scales = {}
         for dim, default in [('長', 0.20), ('寬', 0.20), ('高', 0.30)]:
             dim_frame = ttk.Frame(size_frame)
-            dim_frame.pack(fill=tk.X, pady=3)
+            dim_frame.pack(fill=tk.X, pady=2)
 
-            ttk.Label(dim_frame, text=f"{dim}:", width=3).pack(side=tk.LEFT)
+            ttk.Label(dim_frame, text=f"{dim}:", width=2).pack(side=tk.LEFT)
 
             scale = ttk.Scale(dim_frame, from_=0.05, to=0.5,
                               orient=tk.HORIZONTAL)
             scale.set(default)
-            scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+            scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=3)
 
-            value_label = ttk.Label(dim_frame, text=f"{default:.2f}", width=6)
-            value_label.pack(side=tk.LEFT, pady=3)
+            value_label = ttk.Label(dim_frame, text=f"{default:.2f}", width=5)
+            value_label.pack(side=tk.LEFT)
 
             scale.configure(command=lambda v, lbl=value_label: lbl.configure(
                 text=f"{float(v):.2f}"))
@@ -1096,31 +1099,28 @@ class RobotControlGUI:
             self.obs_size_scales[dim] = scale
 
         # 按鈕
-        btn_frame = ttk.Frame(left_frame)
+        btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill=tk.X, pady=5)
 
         ttk.Button(btn_frame, text="新增障礙物",
-                   command=self.add_obstacle).pack(side=tk.LEFT, padx=2)
+                   command=self.add_obstacle).pack(fill=tk.X, pady=2)
         ttk.Button(btn_frame, text="刪除選中",
-                   command=self.remove_obstacle).pack(side=tk.LEFT, padx=2)
+                   command=self.remove_obstacle).pack(fill=tk.X, pady=2)
         ttk.Button(btn_frame, text="清除全部",
-                   command=self.clear_obstacles).pack(side=tk.LEFT, padx=2)
+                   command=self.clear_obstacles).pack(fill=tk.X, pady=2)
 
-        # 右側:障礙物列表
-        right_frame = ttk.Frame(frame)
-        right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # 障礙物列表
+        list_frame = ttk.LabelFrame(frame, text="當前障礙物列表", padding="5")
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        list_label = ttk.Label(right_frame, text="當前障礙物列表:", font=('Arial', 10, 'bold'))
-        list_label.pack(anchor=tk.W)
-
-        list_scroll = ttk.Scrollbar(right_frame)
+        list_scroll = ttk.Scrollbar(list_frame)
         list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.obstacle_listbox = tk.Listbox(right_frame, height=8,
+        self.obstacle_listbox = tk.Listbox(list_frame, height=10,
                                            font=('Courier', 8),
                                            yscrollcommand=list_scroll.set,
                                            selectmode=tk.SINGLE)
-        self.obstacle_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=2)
+        self.obstacle_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         list_scroll.config(command=self.obstacle_listbox.yview)
 
     def add_obstacle(self):
@@ -1174,7 +1174,7 @@ class RobotControlGUI:
     def create_system_control(self, parent):
         """系統控制面板"""
         frame = ttk.Frame(parent)
-        frame.grid(row=2, column=0, columnspan=3, pady=10, sticky=(tk.W, tk.E))
+        frame.grid(row=1, column=0, columnspan=3, pady=10, sticky=(tk.W, tk.E))
 
         ttk.Button(frame, text="關閉程式",
                    command=self.quit_program).pack(side=tk.RIGHT, padx=5)

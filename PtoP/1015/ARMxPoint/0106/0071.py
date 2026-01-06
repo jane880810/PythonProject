@@ -9,6 +9,7 @@ Tkinter 控制介面(增強版 GUI + 障礙物功能)
 3. 碰撞檢測功能
 4. 障礙物列表顯示
 5. 軌跡執行時自動避障
+6. 障礙物控制介面移至右側
 
 原有功能:
 1. 關節動畫速度調節
@@ -34,10 +35,155 @@ import os
 from datetime import datetime
 
 
+# ---------- 手臂連桿包圍盒類別 ----------
+
+def create_bbox_from_mesh(mesh, name="", expansion=0.01):
+    """
+    從 mesh 自動創建貼合的包圍盒
+    mesh: Open3D TriangleMesh
+    name: 包圍盒名稱
+    expansion: 擴展尺寸(公尺),用於安全餘量
+    """
+    # 獲取 mesh 的包圍盒
+    bbox_points = np.asarray(mesh.vertices)
+    min_bound = bbox_points.min(axis=0)
+    max_bound = bbox_points.max(axis=0)
+
+    # 計算中心和尺寸
+    center = (min_bound + max_bound) / 2
+    size = max_bound - min_bound + expansion * 2  # 加上安全餘量
+
+    return center, size
+
+
+class ArmSegmentBoundingBox:
+    """手臂連桿包圍盒 - 用於碰撞檢測"""
+
+    def __init__(self, center, size, name="", color=[0.0, 1.0, 1.0, 1.0]):
+        """
+        初始化手臂連桿包圍盒
+        center: [x, y, z] 中心位置 (公尺)
+        size: [length, width, height] 尺寸 (公尺)
+        name: 連桿名稱
+        color: RGB顏色 (青色線框)
+        """
+        self.initial_center = np.array(center, dtype=float)
+        self.current_center = np.array(center, dtype=float)
+        self.size = np.array(size, dtype=float)
+        self.name = name if name else f"Segment_{id(self)}"
+        self.color = color[:3]  # RGB only for Open3D - 青色 [0, 1, 1]
+        self.mesh = None
+        self.R_total = np.eye(3)  # 累積的旋轉矩陣
+        self.create_mesh()
+
+    def create_mesh(self):
+        """創建包圍盒的線框網格"""
+        # 先創建實體包圍盒
+        box = o3d.geometry.TriangleMesh.create_box(
+            width=self.size[0],
+            height=self.size[1],
+            depth=self.size[2]
+        )
+        # 移動到中心位置
+        box.translate(self.current_center - self.size / 2)
+
+        # 轉換為線框 LineSet
+        self.mesh = o3d.geometry.LineSet.create_from_triangle_mesh(box)
+
+        # 設定青色線條
+        self.mesh.paint_uniform_color(self.color)
+
+    def transform(self, transformation, center):
+        """
+        應用變換矩陣
+        transformation: 4x4 變換矩陣
+        center: 旋轉中心點
+        """
+        # 更新累積旋轉矩陣
+        R = transformation[:3, :3]
+        self.R_total = R @ self.R_total
+
+        # 應用旋轉和平移
+        self.mesh.rotate(R, center=center)
+        self.mesh.translate(transformation[:3, 3])
+
+        # 更新當前中心位置
+        self.current_center = R @ (self.current_center - center) + center + transformation[:3, 3]
+
+    def check_collision_with_point(self, point):
+        """
+        檢查點是否與包圍盒碰撞
+        使用 OBB (Oriented Bounding Box) 檢測
+        point: [x, y, z] 檢查點座標
+        返回: True 如果碰撞, False 如果安全
+        """
+        point = np.array(point)
+
+        # 將點轉換到包圍盒的局部座標系
+        # 使用逆旋轉矩陣將點轉換到包圍盒的局部空間
+        R_inv = self.R_total.T  # 旋轉矩陣的逆 = 轉置
+        local_point = R_inv @ (point - self.current_center)
+
+        # 在局部座標系中,包圍盒是軸對齊的
+        half_size = self.size / 2
+
+        # 檢查點是否在局部AABB內
+        return np.all(np.abs(local_point) <= half_size)
+
+    def update_mesh(self):
+        """更新包圍盒網格(當參數改變時)"""
+        # 創建新的實體包圍盒
+        box = o3d.geometry.TriangleMesh.create_box(
+            width=self.size[0],
+            height=self.size[1],
+            depth=self.size[2]
+        )
+        box.translate(self.current_center - self.size / 2)
+
+        # 轉換為線框
+        line_set = o3d.geometry.LineSet.create_from_triangle_mesh(box)
+        line_set.paint_uniform_color(self.color)
+
+        # 更新 mesh (實際上是 LineSet)
+        self.mesh.points = line_set.points
+        self.mesh.lines = line_set.lines
+        self.mesh.colors = line_set.colors
+
+
+class ArmBoundingBoxManager:
+    """手臂包圍盒管理器"""
+
+    def __init__(self, visualizer):
+        self.bounding_boxes = []
+        self.vis = visualizer
+
+    def add_bounding_box(self, center, size, name=""):
+        """新增手臂連桿包圍盒"""
+        bbox = ArmSegmentBoundingBox(center, size, name)
+        self.bounding_boxes.append(bbox)
+        self.vis.add_geometry(bbox.mesh)
+        return bbox
+
+    def check_collision_with_point(self, point):
+        """
+        檢查點是否與任何手臂連桿碰撞
+        返回: (is_collision, segment_name)
+        """
+        for bbox in self.bounding_boxes:
+            if bbox.check_collision_with_point(point):
+                return True, bbox.name
+        return False, None
+
+    def get_all_meshes(self):
+        """獲取所有包圍盒網格"""
+        return [bbox.mesh for bbox in self.bounding_boxes]
+
+
 # ---------- 障礙物類別 ----------
 
 class Obstacle:
     """長方體障礙物類別"""
+
     def __init__(self, center, size, name=""):
         """
         初始化障礙物
@@ -99,6 +245,7 @@ class Obstacle:
 
 class ObstacleManager:
     """障礙物管理器"""
+
     def __init__(self, visualizer):
         self.obstacles = []
         self.vis = visualizer
@@ -190,17 +337,28 @@ def compute_arc_with_auto_center(A, B, radius_scale=2.0, num_points=1000):
 # ---------- MeshNode ----------
 
 class MeshNode:
-    def __init__(self, mesh, name=""):
+    def __init__(self, mesh, name="", bounding_box=None):
         self.mesh = mesh
         self.name = name
         self.children = []
+        self.bounding_box = bounding_box  # 對應的包圍盒
 
     def add_child(self, child_node):
         self.children.append(child_node)
 
+    def set_bounding_box(self, bbox):
+        """設定對應的包圍盒"""
+        self.bounding_box = bbox
+
     def transform(self, transformation, center):
         self.mesh.rotate(transformation[:3, :3], center=center)
         self.mesh.translate(transformation[:3, 3])
+
+        # 同步更新包圍盒
+        if self.bounding_box is not None:
+            self.bounding_box.transform(transformation, center)
+            vis.update_geometry(self.bounding_box.mesh)
+
         for child in self.children:
             child.transform(transformation, center)
 
@@ -231,7 +389,7 @@ print("=" * 60 + "\n")
 
 paths = [rf"/home/yahboom/Desktop/Obj/p{i}.obj" for i in range(1, 9)]
 #paths = [rf"/home/test/桌面/Obj/p{i}.obj" for i in range(1, 9)]
-#paths = [rf"C:\Users\Administrator\OneDrive - Ming Chuan University\Desktop\Obj\p{i}.obj" for i in range(1, 9)]
+# paths = [rf"C:\Users\Administrator\OneDrive - Ming Chuan University\Desktop\Obj\p{i}.obj" for i in range(1, 9)]
 
 meshes = [o3d.io.read_triangle_mesh(p) for p in paths]
 if not all(m.has_triangles() for m in meshes):
@@ -329,11 +487,59 @@ vis.add_geometry(base_frame)
 # ---------- 初始化障礙物管理器 ----------
 obstacle_manager = ObstacleManager(vis)
 
+# ---------- 初始化手臂包圍盒管理器 ----------
+# 在所有初始旋轉完成後才創建包圍盒
+arm_bbox_manager = ArmBoundingBoxManager(vis)
+
+# 自動從 mesh 創建包圍盒
+mesh_bbox_pairs = [
+    (meshes[1], "Link1_p2", 0.01),  # p2
+    (meshes[2], "Link2_p3", 0.01),  # p3
+    (meshes[3], "Link3_p4", 0.01),  # p4
+    (meshes[4], "Link4_p5", 0.01),  # p5
+    (meshes[5], "Link5_p6", 0.01),  # p6
+    (meshes[6], "Link6_p7", 0.01),  # p7
+    # 不包含 p8 (末端執行器)
+]
+
+arm_bboxes = []
+# 跳過 p1 (底座不需要包圍盒)
+arm_bboxes.append(None)  # placeholder for p1
+
+for mesh, name, expansion in mesh_bbox_pairs:
+    center, size = create_bbox_from_mesh(mesh, name, expansion)
+    bbox = arm_bbox_manager.add_bounding_box(center, size, name)
+    arm_bboxes.append(bbox)
+
+# 將包圍盒綁定到對應的節點
+if len(arm_bboxes) >= 7:
+    # p1 跳過 (index 0)
+
+    # p2 - 跟隨 node2 旋轉 (Z軸) - index 1
+    node2.set_bounding_box(arm_bboxes[1])
+
+    # p3 - 跟隨 node3 旋轉 (Y軸,shoulder) - index 2
+    node3.set_bounding_box(arm_bboxes[2])
+
+    # p4 - 跟隨 node4 旋轉 (Y軸,elbow) - index 3
+    node4.set_bounding_box(arm_bboxes[3])
+
+    # p5 - 跟隨 node5 旋轉 (Z軸,wrist roll) - index 4
+    node5.set_bounding_box(arm_bboxes[4])
+
+    # p6 - 跟隨 node6 旋轉 (Y軸,wrist pitch) - index 5
+    node6.set_bounding_box(arm_bboxes[5])
+
+    # p7 - 跟隨 node7 旋轉 (X軸,wrist yaw) - index 6
+    node7.set_bounding_box(arm_bboxes[6])
+
+    # p8 不需要包圍盒
+
 
 # ---------- 控制器 ----------
 
 class AnimationController:
-    def __init__(self, obstacle_manager):
+    def __init__(self, obstacle_manager, arm_bbox_manager):
         self.S1, self.S2 = S1, S2
         self.L1, self.L2, self.L3, self.L4 = L1, L2, L3, L4
 
@@ -371,6 +577,7 @@ class AnimationController:
         self.skip_unreachable_points = True
         self.skipped_points_count = 0
         self.collision_count = 0  # 碰撞計數
+        self.arm_collision_count = 0  # 手臂自碰撞計數
         self.status_callback = None
 
         # 殘影軌跡相關變量
@@ -379,6 +586,9 @@ class AnimationController:
 
         # 障礙物管理器
         self.obstacle_manager = obstacle_manager
+
+        # 手臂包圍盒管理器
+        self.arm_bbox_manager = arm_bbox_manager
 
     def set_marker(self, marker):
         self.joint5_marker = marker
@@ -674,13 +884,14 @@ class AnimationController:
         self.trajectory_points = points
         self.trajectory_index = 0
         self.skipped_points_count = 0
-        self.collision_count = 0  # 重置碰撞計數
+        self.collision_count = 0  # 重置環境碰撞計數
+        self.arm_collision_count = 0  # 重置手臂碰撞計數
         self.is_following_trajectory = True
         self.last_trajectory_time = time.time()
         self.move_next_point()
 
     def move_next_point(self):
-        """移動到下一個軌跡點(含障礙物檢測)"""
+        """移動到下一個軌跡點(含障礙物檢測和手臂自碰撞檢測)"""
         if not self.is_following_trajectory or self.trajectory_points is None:
             return
 
@@ -688,16 +899,17 @@ class AnimationController:
             self.is_following_trajectory = False
             self.skipped_points_count = 0
             self.collision_count = 0
+            self.arm_collision_count = 0
             self.log_status(f"軌跡執行完成!")
             return
 
         pt = self.trajectory_points[self.trajectory_index]
 
-        # 檢查是否與障礙物碰撞
+        # 檢查是否與環境障礙物碰撞
         is_collision, obstacle_name = self.obstacle_manager.check_collision(pt)
 
         if is_collision:
-            # 發現碰撞,跳過此點
+            # 發現與環境障礙物碰撞,跳過此點
             self.collision_count += 1
             self.log_status(f"警告: 點 {self.trajectory_index} 與 {obstacle_name} 碰撞,已跳過")
             self.trajectory_index += self.trajectory_step
@@ -705,7 +917,23 @@ class AnimationController:
             # 如果碰撞次數過多,停止執行
             if self.collision_count > len(self.trajectory_points) * 0.3:
                 self.is_following_trajectory = False
-                self.log_status(f"錯誤: 碰撞點過多({self.collision_count}),已停止執行")
+                self.log_status(f"錯誤: 環境碰撞點過多({self.collision_count}),已停止執行")
+                return
+            return
+
+        # 檢查是否與手臂本身碰撞
+        is_arm_collision, arm_segment_name = self.arm_bbox_manager.check_collision_with_point(pt)
+
+        if is_arm_collision:
+            # 發現與手臂自身碰撞,跳過此點
+            self.arm_collision_count += 1
+            self.log_status(f"警告: 點 {self.trajectory_index} 與手臂 {arm_segment_name} 碰撞,已跳過")
+            self.trajectory_index += self.trajectory_step
+
+            # 如果手臂自碰撞次數過多,停止執行
+            if self.arm_collision_count > len(self.trajectory_points) * 0.2:
+                self.is_following_trajectory = False
+                self.log_status(f"錯誤: 手臂自碰撞點過多({self.arm_collision_count}),已停止執行")
                 return
             return
 
@@ -742,10 +970,18 @@ class AnimationController:
 
                     pt_next = self.trajectory_points[self.trajectory_index]
 
-                    # 檢查下一個點是否碰撞
+                    # 檢查下一個點是否與環境障礙物碰撞
                     is_collision_next, obstacle_name_next = self.obstacle_manager.check_collision(pt_next)
                     if is_collision_next:
                         self.collision_count += 1
+                        self.trajectory_index += self.trajectory_step
+                        continue
+
+                    # 檢查下一個點是否與手臂碰撞
+                    is_arm_collision_next, arm_segment_name_next = self.arm_bbox_manager.check_collision_with_point(
+                        pt_next)
+                    if is_arm_collision_next:
+                        self.arm_collision_count += 1
                         self.trajectory_index += self.trajectory_step
                         continue
 
@@ -788,6 +1024,7 @@ class AnimationController:
         self.is_following_trajectory = False
         self.skipped_points_count = 0
         self.collision_count = 0
+        self.arm_collision_count = 0
         self.clear_trajectory_markers()
 
     def reset_pose(self):
@@ -805,11 +1042,11 @@ class AnimationController:
                 scale.config(command=self._make_scale_command(i))
 
 
-ctrl = AnimationController(obstacle_manager)
+ctrl = AnimationController(obstacle_manager, arm_bbox_manager)
 exit_flag = False
 
 
-# ---------- 增強版 GUI (含障礙物控制) ----------
+# ---------- 增強版 GUI (障礙物控制移至右側) ----------
 
 class RobotControlGUI:
     def __init__(self, root, controller, obstacle_manager):
@@ -817,7 +1054,7 @@ class RobotControlGUI:
         self.ctrl = controller
         self.obstacle_mgr = obstacle_manager
         self.root.title("RA605-710-GC 六軸機械手臂控制系統 (障礙物避障版)")
-        self.root.geometry("850x900+0+50")
+        self.root.geometry("850x1050+0+50")
 
         self.setup_ui()
         self.ctrl.set_status_callback(self.append_status)
@@ -830,11 +1067,13 @@ class RobotControlGUI:
 
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
+        main_frame.columnconfigure(0, weight=0)  # 左側固定寬度
+        main_frame.columnconfigure(1, weight=1)  # 右側可伸縮
+        main_frame.rowconfigure(0, weight=1)  # 上方可伸縮
+        main_frame.rowconfigure(1, weight=0)  # 下方固定高度
 
         self.create_joint_control(main_frame)
-        self.create_position_control(main_frame)
-        self.create_obstacle_control(main_frame)  # 新增障礙物控制面板
+        self.create_right_panel(main_frame)  # 建立右側面板(包含位置控制和障礙物控制)
         self.create_system_control(main_frame)
 
     def create_joint_control(self, parent):
@@ -903,10 +1142,22 @@ class RobotControlGUI:
         ttk.Button(btn_frame, text="重置姿態",
                    command=self.reset_pose).pack(fill=tk.X, pady=2)
 
+    def create_right_panel(self, parent):
+        """建立右側面板 - 包含位置控制和障礙物控制"""
+        frame = ttk.Frame(parent)
+        frame.grid(row=0, column=1, padx=5, pady=5, sticky=(tk.N, tk.S, tk.W, tk.E))
+
+        frame.rowconfigure(0, weight=2)  # 位置控制區域(較大)
+        frame.rowconfigure(1, weight=1)  # 障礙物控制區域(較小)
+        frame.columnconfigure(0, weight=1)
+
+        self.create_position_control(frame)
+        self.create_obstacle_control(frame)
+
     def create_position_control(self, parent):
         """位置控制與軌跡規劃面板"""
         frame = ttk.Frame(parent)
-        frame.grid(row=0, column=1, padx=5, pady=5, sticky=(tk.N, tk.S, tk.W, tk.E))
+        frame.grid(row=0, column=0, padx=0, pady=(0, 5), sticky=(tk.N, tk.S, tk.W, tk.E))
 
         current_frame = ttk.LabelFrame(frame, text="當前末端位置 (J5)", padding="10")
         current_frame.pack(fill=tk.X, pady=(0, 10))
@@ -1039,32 +1290,32 @@ class RobotControlGUI:
                    command=self.reset_trajectory).pack(side=tk.LEFT, padx=2)
 
     def create_obstacle_control(self, parent):
-        """障礙物控制面板"""
+        """障礙物控制面板 - 位於右側下方"""
         frame = ttk.LabelFrame(parent, text="障礙物管理", padding="10")
-        frame.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky=(tk.W, tk.E, tk.N, tk.S))
+        frame.grid(row=1, column=0, padx=0, pady=(5, 0), sticky=(tk.W, tk.E, tk.N, tk.S))
 
-        # 左側:參數設定
-        left_frame = ttk.Frame(frame)
-        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        # 上方:參數設定
+        param_frame = ttk.Frame(frame)
+        param_frame.pack(fill=tk.X, pady=(0, 10))
 
         # 中心位置
-        center_frame = ttk.LabelFrame(left_frame, text="中心位置 (公尺)", padding="5")
-        center_frame.pack(fill=tk.X, pady=5)
+        center_frame = ttk.LabelFrame(param_frame, text="中心位置 (公尺)", padding="5")
+        center_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
 
         self.obs_center_scales = {}
         for axis, default in [('X', 0.30), ('Y', 0.30), ('Z', 0.65)]:
             axis_frame = ttk.Frame(center_frame)
-            axis_frame.pack(fill=tk.X, pady=3)
+            axis_frame.pack(fill=tk.X, pady=2)
 
-            ttk.Label(axis_frame, text=f"{axis}:", width=3).pack(side=tk.LEFT)
+            ttk.Label(axis_frame, text=f"{axis}:", width=2).pack(side=tk.LEFT)
 
             scale = ttk.Scale(axis_frame, from_=-0.7, to=0.7 if axis != 'Z' else 1.0,
                               orient=tk.HORIZONTAL)
             scale.set(default)
-            scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+            scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=3)
 
-            value_label = ttk.Label(axis_frame, text=f"{default:.2f}", width=6)
-            value_label.pack(side=tk.LEFT, pady=3)
+            value_label = ttk.Label(axis_frame, text=f"{default:.2f}", width=5)
+            value_label.pack(side=tk.LEFT)
 
             scale.configure(command=lambda v, lbl=value_label: lbl.configure(
                 text=f"{float(v):.2f}"))
@@ -1072,32 +1323,32 @@ class RobotControlGUI:
             self.obs_center_scales[axis] = scale
 
         # 尺寸
-        size_frame = ttk.LabelFrame(left_frame, text="尺寸 (公尺)", padding="5")
-        size_frame.pack(fill=tk.X, pady=5)
+        size_frame = ttk.LabelFrame(param_frame, text="尺寸 (公尺)", padding="5")
+        size_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
 
         self.obs_size_scales = {}
         for dim, default in [('長', 0.20), ('寬', 0.20), ('高', 0.30)]:
             dim_frame = ttk.Frame(size_frame)
-            dim_frame.pack(fill=tk.X, pady=3)
+            dim_frame.pack(fill=tk.X, pady=2)
 
-            ttk.Label(dim_frame, text=f"{dim}:", width=3).pack(side=tk.LEFT)
+            ttk.Label(dim_frame, text=f"{dim}:", width=2).pack(side=tk.LEFT)
 
             scale = ttk.Scale(dim_frame, from_=0.05, to=0.5,
                               orient=tk.HORIZONTAL)
             scale.set(default)
-            scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+            scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=3)
 
-            value_label = ttk.Label(dim_frame, text=f"{default:.2f}", width=6)
-            value_label.pack(side=tk.LEFT, pady=3)
+            value_label = ttk.Label(dim_frame, text=f"{default:.2f}", width=5)
+            value_label.pack(side=tk.LEFT)
 
             scale.configure(command=lambda v, lbl=value_label: lbl.configure(
                 text=f"{float(v):.2f}"))
 
             self.obs_size_scales[dim] = scale
 
-        # 按鈕
-        btn_frame = ttk.Frame(left_frame)
-        btn_frame.pack(fill=tk.X, pady=5)
+        # 中間:按鈕
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X, pady=(0, 10))
 
         ttk.Button(btn_frame, text="新增障礙物",
                    command=self.add_obstacle).pack(side=tk.LEFT, padx=2)
@@ -1106,21 +1357,24 @@ class RobotControlGUI:
         ttk.Button(btn_frame, text="清除全部",
                    command=self.clear_obstacles).pack(side=tk.LEFT, padx=2)
 
-        # 右側:障礙物列表
-        right_frame = ttk.Frame(frame)
-        right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # 下方:障礙物列表
+        list_frame = ttk.Frame(frame)
+        list_frame.pack(fill=tk.BOTH, expand=True)
 
-        list_label = ttk.Label(right_frame, text="當前障礙物列表:", font=('Arial', 10, 'bold'))
+        list_label = ttk.Label(list_frame, text="當前障礙物列表:", font=('Arial', 9, 'bold'))
         list_label.pack(anchor=tk.W)
 
-        list_scroll = ttk.Scrollbar(right_frame)
+        list_container = ttk.Frame(list_frame)
+        list_container.pack(fill=tk.BOTH, expand=True)
+
+        list_scroll = ttk.Scrollbar(list_container)
         list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.obstacle_listbox = tk.Listbox(right_frame, height=8,
+        self.obstacle_listbox = tk.Listbox(list_container, height=4,
                                            font=('Courier', 8),
                                            yscrollcommand=list_scroll.set,
                                            selectmode=tk.SINGLE)
-        self.obstacle_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=2)
+        self.obstacle_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         list_scroll.config(command=self.obstacle_listbox.yview)
 
     def add_obstacle(self):
@@ -1174,7 +1428,7 @@ class RobotControlGUI:
     def create_system_control(self, parent):
         """系統控制面板"""
         frame = ttk.Frame(parent)
-        frame.grid(row=2, column=0, columnspan=3, pady=10, sticky=(tk.W, tk.E))
+        frame.grid(row=1, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
 
         ttk.Button(frame, text="關閉程式",
                    command=self.quit_program).pack(side=tk.RIGHT, padx=5)
@@ -1299,8 +1553,9 @@ class RobotControlGUI:
                 current = self.ctrl.trajectory_index
                 step = self.ctrl.trajectory_step
                 progress = (current / total * 100) if total > 0 else 0
-                collision = self.ctrl.collision_count
-                status_msg = f"執行中... {current}/{total} ({progress:.1f}%)\n倍速: {step}倍\n碰撞點數: {collision}"
+                env_collision = self.ctrl.collision_count
+                arm_collision = self.ctrl.arm_collision_count
+                status_msg = f"執行中... {current}/{total} ({progress:.1f}%)\n倍速: {step}倍\n環境碰撞: {env_collision}\n手臂碰撞: {arm_collision}"
                 self.update_status(status_msg)
 
             self.root.after(50, self.update_display)
