@@ -33,17 +33,15 @@ def setup_ros_environment():
     """設定ROS環境"""
     print("正在設定ROS環境...")
 
-    # 設定環境變數
     os.environ['ROS_MASTER_URI'] = 'http://192.168.40.128:11311'
     os.environ['ROS_IP'] = '192.168.40.128'
-
-    # 設定日誌設定以消除警告
     os.environ['ROSCONSOLE_CONFIG_FILE'] = '/opt/ros/noetic/etc/ros/rosconsole.config'
 
-    # 新增ROS路徑到Python path
     ros_paths = [
         "/opt/ros/noetic/lib/python3/dist-packages",
-        "/home/yahboom/ascam_ws/devel/lib/python3/dist-packages"
+        "/home/yahboom/ascam_ws/devel/lib/python3/dist-packages",
+        "/usr/lib/python3/dist-packages",  # ← 新增這行
+        "/usr/local/lib/python3.8/dist-packages",  # ← 新增這行
     ]
 
     for path in ros_paths:
